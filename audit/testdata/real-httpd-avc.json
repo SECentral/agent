@@ -1,0 +1,22 @@
+{
+  "source": "sanitized real AVC captured from the Alma/RHEL-compatible test host",
+  "records": [
+    {
+      "type_name": "AVC",
+      "payload": "type=AVC msg=audit(1789425026.418:31038): avc:  denied  { map } for  pid=1322 comm=\"httpd\" path=\"/var/www/html/example.html\" dev=\"vda4\" ino=67116852 scontext=system_u:system_r:httpd_t:s0 tcontext=unconfined_u:object_r:pktcdvd_control_device_t:s0 tclass=file permissive=1"
+    },
+    {
+      "type_name": "SYSCALL",
+      "payload": "type=SYSCALL msg=audit(1789425026.418:31038): arch=c000003e syscall=9 success=yes ppid=1317 pid=1322 auid=4294967295 uid=48 gid=48 comm=\"httpd\" exe=\"/usr/sbin/httpd\" subj=system_u:system_r:httpd_t:s0"
+    },
+    {
+      "type_name": "PROCTITLE",
+      "payload": "type=PROCTITLE msg=audit(1789425026.418:31038): proctitle=2F7573722F7362696E2F6874747064002D44464F524547524F554E44"
+    }
+  ],
+  "expected": {
+    "sequence": 31038,
+    "record_count": 3,
+    "completion_reason": "shutdown"
+  }
+}
