@@ -2,6 +2,9 @@ version: 2
 
 project_name: secentral
 
+snapshot:
+  name_template: "dev+{{ .ShortCommit }}"
+
 builds:
   - id: agent
     main: ./cmd/secentral-agent

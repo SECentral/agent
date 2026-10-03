@@ -29,6 +29,11 @@ import (
 	"github.com/secentral/agent/spool"
 )
 
+var (
+	version = "dev"
+	commit  = "unknown"
+)
+
 type captureStats struct {
 	received   atomic.Uint64
 	assembled  atomic.Uint64
@@ -194,12 +199,16 @@ func main() {
 	spoolRoot := flag.String("spool", getenv("SECENTRAL_SPOOL", "/var/lib/secentral/spool"), "agent spool directory")
 	interval := flag.Duration("interval", 5*time.Second, "delivery polling interval")
 	heartbeatInterval := flag.Duration("heartbeat-interval", 5*time.Minute, "heartbeat interval")
-	version := flag.String("agent-version", getenv("SECENTRAL_AGENT_VERSION", "dev"), "agent version")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	replay := flag.String("replay", "", "replay a Protocol v1 JSON request and exit")
 	debug := flag.Bool("debug", envBool("SECENTRAL_DEBUG"), "enable structured debug logging")
 	flag.Parse()
+	if *showVersion {
+		fmt.Printf("secentral-agent %s (commit %s)\n", version, commit)
+		return
+	}
 	logger := newLogger(*debug)
-	logger.Info("agent starting", "endpoint", *endpoint, "spool", *spoolRoot, "interval", interval.String(), "replay", *replay != "")
+	logger.Info("agent starting", "version", version, "commit", commit, "endpoint", *endpoint, "spool", *spoolRoot, "interval", interval.String(), "replay", *replay != "")
 
 	if *endpoint == "" || *ingestionKey == "" {
 		fatal(logger, "endpoint and ingestion key are required")
@@ -217,7 +226,7 @@ func main() {
 	logger.Debug("spool ready")
 	client := delivery.Client{Endpoint: *endpoint, IngestionKey: *ingestionKey}
 	if *replay != "" {
-		if err := replayRequest(*replay, *version, store); err != nil {
+		if err := replayRequest(*replay, version, store); err != nil {
 			fatal(logger, "replay request", err)
 		}
 		logger.Debug("replay request spooled", "path", *replay)
@@ -234,7 +243,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, client, store, *interval, *heartbeatInterval, *version, logger); err != nil {
+	if err := run(ctx, client, store, *interval, *heartbeatInterval, version, logger); err != nil {
 		fatal(logger, "agent stopped", err)
 	}
 }

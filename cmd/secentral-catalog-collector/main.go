@@ -11,12 +11,19 @@ import (
 	"github.com/secentral/agent/metadata"
 )
 
+var (
+	version = "dev"
+	commit  = "unknown"
+)
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
 	}
 	switch os.Args[1] {
+	case "--version", "-version":
+		fmt.Printf("secentral-catalog-collector %s (commit %s)\n", version, commit)
 	case "inspect":
 		inspect()
 	case "collect":
