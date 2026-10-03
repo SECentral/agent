@@ -1,0 +1,45 @@
+version: 2
+
+project_name: secentral
+
+builds:
+  - id: agent
+    main: ./cmd/secentral-agent
+    binary: secentral-agent
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+      - ppc64
+      - s390x
+  - id: catalog-collector
+    main: ./cmd/secentral-catalog-collector
+    binary: secentral-catalog-collector
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+      - ppc64
+      - s390x
+
+archives:
+  - id: agent
+    builds:
+      - agent
+    name_template: "{{ .ProjectName }}-agent_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - src: contrib/systemd/secentral-agent.service
+        dst: systemd/secentral-agent.service
+  - id: catalog-collector
+    builds:
+      - catalog-collector
+    name_template: "{{ .ProjectName }}-catalog-collector_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
