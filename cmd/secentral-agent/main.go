@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -345,7 +346,11 @@ func run(ctx context.Context, client delivery.Client, store *spool.Spool, interv
 				// Invalidate on receipt, not event completion, so a timeout cannot
 				// let a later AVC inherit the pre-transition state checkpoint.
 				policyChanged := result.message.Type != auparse.AUDIT_MAC_STATUS
-				unknown := invalidateHostState(hostState, policyChanged)
+				fields := []string{"enforcement"}
+				if result.message.Type == auparse.AUDIT_USER_MAC_CONFIG_CHANGE {
+					fields = []string{"ports", "policy_identity"}
+				}
+				unknown := invalidateHostState(hostState, policyChanged && result.message.Type != auparse.AUDIT_USER_MAC_CONFIG_CHANGE, fields...)
 				logger.Info("SELinux state boundary observed", "record_type", result.message.Type.String(), "agent_received_at", time.Now().UTC(), "state_generation", unknown.generation, "policy_invalidated", policyChanged, "checkpoint_invalidated_fields", unknown.checkpointInvalidatedFields)
 				requestPolicyRefresh(refreshRequests)
 			}
@@ -410,7 +415,7 @@ func publishHostState(state *atomic.Pointer[observedHost], previous *observedHos
 	return updated, state.CompareAndSwap(previous, updated)
 }
 
-func invalidateHostState(state *atomic.Pointer[observedHost], policyChanged bool) *observedHost {
+func invalidateHostState(state *atomic.Pointer[observedHost], policyChanged bool, fields ...string) *observedHost {
 	for {
 		previous := state.Load()
 		next := *previous
@@ -422,10 +427,24 @@ func invalidateHostState(state *atomic.Pointer[observedHost], policyChanged bool
 			next.observedAt = time.Time{}
 			next.checkpointInvalidatedFields = nil
 		} else {
-			next.metadata.SELinux.Enforcement = metadata.Unknown
-			// Keep the source checkpoint for unchanged policy/boolean facts,
-			// while explicitly ending its enforcement trust in queued evidence.
-			next.checkpointInvalidatedFields = []string{"enforcement"}
+			if len(fields) == 0 {
+				fields = []string{"enforcement"}
+			}
+			next.checkpointInvalidatedFields = slices.Clone(previous.checkpointInvalidatedFields)
+			for _, field := range fields {
+				if !slices.Contains(next.checkpointInvalidatedFields, field) {
+					next.checkpointInvalidatedFields = append(next.checkpointInvalidatedFields, field)
+				}
+				switch field {
+				case "enforcement":
+					next.metadata.SELinux.Enforcement = metadata.Unknown
+				case "policy_identity":
+					next.metadata.SELinux.PolicyIdentity = ""
+				case "ports":
+					next.metadata.SELinux.Policy.PortInventory = &metadata.PortInventory{Status: "unknown"}
+				}
+			}
+			slices.Sort(next.checkpointInvalidatedFields)
 		}
 		if state.CompareAndSwap(previous, &next) {
 			return &next

@@ -226,7 +226,7 @@ func BooleanChangeFields(message *libaudit.RawAuditMessage) map[string]string {
 }
 
 func SuccessfulStateTransitionRecord(message *libaudit.RawAuditMessage) bool {
-	if SuccessfulPolicyLoadRecord(message) || SuccessfulEnforcementChangeRecord(message) {
+	if SuccessfulPolicyLoadRecord(message) || SuccessfulEnforcementChangeRecord(message) || SuccessfulPortChangeRecord(message) {
 		return true
 	}
 	fields := BooleanChangeFields(message)
@@ -271,6 +271,80 @@ func EnforcementChangeFields(message *libaudit.RawAuditMessage) map[string]strin
 func SuccessfulEnforcementChangeRecord(message *libaudit.RawAuditMessage) bool {
 	fields := EnforcementChangeFields(message)
 	return fields != nil && fields["res"] == "1" && fields["enforcing"] != fields["old_enforcing"]
+}
+
+var userChangeMessage = regexp.MustCompile(`(?:^|\s)msg='([^']*)'(?:\s|$)`)
+var userChangeField = regexp.MustCompile(`(?:^|\s)([A-Za-z_]+)=("(?:\\.|[^"])*"|[^\s"]*)`)
+var userChangeBody = regexp.MustCompile(`^(?:[A-Za-z_]+=(?:"(?:\\.|[^"])*"|[^\s"]*)(?:\s+|$))+$`)
+var portNumber = regexp.MustCompile(`^[0-9]+(?:-[0-9]+)?$`)
+var portContext = regexp.MustCompile(`^system_u:object_r:[A-Za-z_][A-Za-z0-9_]*:s0$`)
+
+// PortChangeFields supports only the observed libsemanage port write shape.
+// Delete omits context; modify supplies no old value, even for equal-value writes.
+func PortChangeFields(message *libaudit.RawAuditMessage) map[string]string {
+	if message == nil || message.Type != auparse.AUDIT_USER_MAC_CONFIG_CHANGE {
+		return nil
+	}
+	matches := userChangeMessage.FindAllStringSubmatch(string(message.Data), -1)
+	if len(matches) != 1 || !userChangeBody.MatchString(matches[0][1]) {
+		return nil
+	}
+	fields := make(map[string]string)
+	for _, field := range userChangeField.FindAllStringSubmatch(matches[0][1], -1) {
+		key, value := field[1], field[2]
+		switch key {
+		case "resrc", "op", "lport", "proto", "tcontext", "res", "success", "old_tcontext", "old_type":
+			if _, duplicate := fields[key]; duplicate {
+				return nil
+			}
+			fields[key] = value
+		}
+	}
+	if fields["resrc"] != "port" || (fields["op"] != "add" && fields["op"] != "modify" && fields["op"] != "delete") ||
+		(fields["proto"] != "6" && fields["proto"] != "17") || !portNumber.MatchString(fields["lport"]) {
+		return nil
+	}
+	low, high, ranged := strings.Cut(fields["lport"], "-")
+	if !ranged {
+		high = low
+	}
+	start, err := strconv.ParseUint(low, 10, 16)
+	end, endErr := strconv.ParseUint(high, 10, 16)
+	if err != nil || endErr != nil || start == 0 || end < start {
+		return nil
+	}
+	if fields["op"] == "delete" {
+		if _, present := fields["tcontext"]; present {
+			return nil
+		}
+	} else if !portContext.MatchString(fields["tcontext"]) {
+		return nil
+	}
+	for _, key := range []string{"success", "old_tcontext", "old_type"} {
+		if _, present := fields[key]; present {
+			return nil
+		}
+	}
+	return fields
+}
+
+func SuccessfulPortChangeRecord(message *libaudit.RawAuditMessage) bool {
+	fields := PortChangeFields(message)
+	return fields != nil && fields["res"] == "success"
+}
+
+// Retain malformed/failed port history, without collecting unrelated semanage families.
+func PortChangeRecord(message *libaudit.RawAuditMessage) bool {
+	if message == nil || message.Type != auparse.AUDIT_USER_MAC_CONFIG_CHANGE {
+		return false
+	}
+	matches := userChangeMessage.FindAllStringSubmatch(string(message.Data), -1)
+	for _, match := range matches {
+		if match[1] == "resrc=port" || strings.HasPrefix(match[1], "resrc=port ") {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *Assembler) Maintain(now time.Time) []Event {
@@ -367,7 +441,7 @@ func eventCategory(records []Record) (Category, bool) {
 		}
 	}
 	for _, record := range records {
-		if record.Type == auparse.AUDIT_MAC_POLICY_LOAD || record.Type == auparse.AUDIT_MAC_STATUS || BooleanChangeFields(&libaudit.RawAuditMessage{Type: record.Type, Data: record.Raw}) != nil {
+		if record.Type == auparse.AUDIT_MAC_POLICY_LOAD || record.Type == auparse.AUDIT_MAC_STATUS || BooleanChangeFields(&libaudit.RawAuditMessage{Type: record.Type, Data: record.Raw}) != nil || PortChangeRecord(&libaudit.RawAuditMessage{Type: record.Type, Data: record.Raw}) {
 			return CategorySELinuxAdministrative, true
 		}
 	}

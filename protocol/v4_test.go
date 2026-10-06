@@ -58,9 +58,9 @@ func TestIngestRequestReportsSemanticErrors(t *testing.T) {
 }
 
 func TestCheckpointTrustMaskIsNarrowAndOptional(t *testing.T) {
-	for _, fields := range [][]string{nil, {}, {"enforcement"}, {"policy_identity"}, {"enforcement", "enforcement"}} {
+	for _, fields := range [][]string{nil, {}, {"enforcement"}, {"policy_identity"}, {"ports"}, {"enforcement", "policy_identity", "ports"}, {"unsupported"}, {"enforcement", "enforcement"}} {
 		request := IngestRequest{SchemaVersion: SchemaVersion, Agent: AgentMetadata{Version: "test"}, HostID: "host", BootID: "boot", Events: []audit.Event{validEvent()}, CheckpointInvalidatedFields: fields}
-		wantValid := len(fields) == 0 || len(fields) == 1 && fields[0] == "enforcement"
+		wantValid := len(fields) == 0 || fields[0] != "unsupported" && (len(fields) != 2 || fields[0] != fields[1])
 		if (request.Validate() == nil) != wantValid {
 			t.Fatalf("wrong validation for checkpoint fields %v", fields)
 		}

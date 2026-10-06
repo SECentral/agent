@@ -17,7 +17,7 @@ import (
 func TestSpoolSurvivesReopenAndAcknowledgement(t *testing.T) {
 	root := t.TempDir()
 	item := testItem()
-	item.CheckpointInvalidatedFields = []string{"enforcement"}
+	item.CheckpointInvalidatedFields = []string{"enforcement", "policy_identity", "ports"}
 	encoded, err := json.Marshal(item)
 	if err != nil || strings.Contains(string(encoded), `"selinux"`) {
 		t.Fatalf("spool item contains host state: %s, %v", encoded, err)
@@ -41,7 +41,7 @@ func TestSpoolSurvivesReopenAndAcknowledgement(t *testing.T) {
 	if result.Entries[0].Item.Event.Records[0].Raw[0] != 'a' {
 		t.Fatal("stored event changed")
 	}
-	if fields := result.Entries[0].Item.CheckpointInvalidatedFields; len(fields) != 1 || fields[0] != "enforcement" {
+	if fields := result.Entries[0].Item.CheckpointInvalidatedFields; strings.Join(fields, ",") != "enforcement,policy_identity,ports" {
 		t.Fatal("checkpoint trust mask lost on reopen")
 	}
 	gotCheckpoint, wantCheckpoint := result.Entries[0].Item.HostObservedAt, item.HostObservedAt

@@ -32,12 +32,13 @@ func TestReplayRequestSpoolsEvents(t *testing.T) {
 	}
 	observedAt := time.Unix(99, 0).UTC()
 	request := protocol.IngestRequest{
-		SchemaVersion:  protocol.SchemaVersion,
-		Agent:          protocol.AgentMetadata{Version: "test"},
-		HostID:         "host",
-		BootID:         "boot",
-		HostObservedAt: &observedAt,
-		Events:         []audit.Event{event},
+		SchemaVersion:               protocol.SchemaVersion,
+		Agent:                       protocol.AgentMetadata{Version: "test"},
+		HostID:                      "host",
+		BootID:                      "boot",
+		HostObservedAt:              &observedAt,
+		CheckpointInvalidatedFields: []string{"policy_identity", "ports"},
+		Events:                      []audit.Event{event},
 	}
 	requestFile := t.TempDir() + "/request.json"
 	data, err := json.Marshal(request)
@@ -57,6 +58,9 @@ func TestReplayRequestSpoolsEvents(t *testing.T) {
 	result, err := store.Pending()
 	if err != nil || len(result.Entries) != 1 {
 		t.Fatalf("pending = %#v, err = %v", result, err)
+	}
+	if strings.Join(result.Entries[0].Item.CheckpointInvalidatedFields, ",") != "policy_identity,ports" {
+		t.Fatal("replay dropped scoped trust")
 	}
 }
 
@@ -185,6 +189,41 @@ func TestCheckpointTimestampIsAfterStateCollection(t *testing.T) {
 	}
 	if checkpoint.observedAt.Before(info.ModTime()) {
 		t.Fatalf("checkpoint time %s predates the completed boolean read %s", checkpoint.observedAt, info.ModTime())
+	}
+}
+
+func TestPortInvalidationRacePreservesOtherDimensionsAndCombinesMasks(t *testing.T) {
+	state := &atomic.Pointer[observedHost]{}
+	initial := &observedHost{metadata: metadata.HostMetadata{SELinux: metadata.SELinuxMetadata{
+		PolicyIdentity: "sha256:old", Enforcement: metadata.Enforcing, BooleanStatus: "observed",
+		Booleans: []metadata.SELinuxBoolean{{Name: "nis_enabled", Current: new(false)}},
+		Policy:   metadata.PolicyMetadata{PortInventory: &metadata.PortInventory{Status: "observed"}},
+	}}, observedAt: time.Unix(100, 0)}
+	state.Store(initial)
+	first := invalidateHostState(state, false, "ports", "policy_identity")
+	if first.metadata.SELinux.PolicyIdentity != "" || first.metadata.SELinux.Policy.PortInventory.Status != "unknown" ||
+		first.metadata.SELinux.Enforcement != metadata.Enforcing || first.metadata.SELinux.BooleanStatus != "observed" ||
+		!first.observedAt.Equal(initial.observedAt) || len(first.metadata.SELinux.Booleans) != 1 {
+		t.Fatalf("wrong scoped state: %#v", first)
+	}
+	second := invalidateHostState(state, false, "ports", "policy_identity")
+	final := observedHost{metadata: initial.metadata, observedAt: time.Unix(104, 0)}
+	if _, ok := publishHostState(state, second, final); !ok {
+		t.Fatal("final refresh rejected")
+	}
+	if _, ok := publishHostState(state, first, final); ok {
+		t.Fatal("late intermediate inventory published")
+	}
+	mode := invalidateHostState(state, false)
+	combined := invalidateHostState(state, false, "ports", "policy_identity")
+	if strings.Join(combined.checkpointInvalidatedFields, ",") != "enforcement,policy_identity,ports" {
+		t.Fatal("mask was overwritten")
+	}
+	if len(mode.checkpointInvalidatedFields) != 1 {
+		t.Fatal("historical mask mutated")
+	}
+	if initial.metadata.SELinux.Policy.PortInventory.Status != "observed" {
+		t.Fatal("historical ports mutated")
 	}
 }
 

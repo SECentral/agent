@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/secentral/agent/audit"
@@ -75,7 +76,7 @@ func (r IngestRequest) Validate() error {
 		details = append(details, ValidationDetail{Path: "agent.version", Code: "required"})
 	}
 	for i, field := range r.CheckpointInvalidatedFields {
-		if field != "enforcement" || i > 0 {
+		if !slices.Contains([]string{"enforcement", "ports", "policy_identity"}, field) || slices.Contains(r.CheckpointInvalidatedFields[:i], field) {
 			details = append(details, ValidationDetail{Path: "checkpoint_invalidated_fields", Code: "invalid_checkpoint_fields"})
 		}
 	}
