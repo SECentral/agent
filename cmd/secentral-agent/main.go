@@ -73,6 +73,7 @@ type expectedContextWork struct {
 }
 
 type expectedContextInspector struct {
+	state      *atomic.Pointer[observedHost]
 	ctx        context.Context
 	store      *spool.Spool
 	version    string
@@ -84,17 +85,20 @@ type expectedContextInspector struct {
 	full       bool
 }
 
-func newExpectedContextInspector(ctx context.Context, store *spool.Spool, version string, logger *slog.Logger) *expectedContextInspector {
+func newExpectedContextInspector(ctx context.Context, store *spool.Spool, version string, logger *slog.Logger, state ...*atomic.Pointer[observedHost]) *expectedContextInspector {
 	inspector := &expectedContextInspector{
 		ctx: ctx, store: store, version: version, logger: logger,
 		queue: make(chan expectedContextWork, expectedContextQueue),
 		done:  make(chan struct{}), seen: make(map[string]struct{}),
 	}
+	if len(state) > 0 {
+		inspector.state = state[0]
+	}
 	go inspector.run()
 	return inspector
 }
 
-func (i *expectedContextInspector) enqueue(hostID, bootID string, hostObservedAt *time.Time, event audit.Event) {
+func (i *expectedContextInspector) enqueue(hostID, bootID string, hostObservedAt *time.Time, event audit.Event, invalidated ...string) {
 	checkpoint := ""
 	if hostObservedAt != nil {
 		checkpoint = hostObservedAt.UTC().String()
@@ -147,6 +151,9 @@ func (i *expectedContextInspector) enqueue(hostID, bootID string, hostObservedAt
 		if target.FileType != "" {
 			request.Observation.Reason = "inspection_pending"
 		}
+		if slices.Contains(invalidated, "file_context_mappings") {
+			request.Observation.Reason = "file_context_mapping_boundary"
+		}
 		select {
 		case i.queue <- expectedContextWork{request: request, target: target}:
 			i.seen[key] = struct{}{}
@@ -169,7 +176,11 @@ func (i *expectedContextInspector) run() {
 	defer close(i.done)
 	for work := range i.queue {
 		observation := work.request.Observation
-		if work.target.FileType != "" {
+		if work.target.FileType != "" && observation.Reason != "file_context_mapping_boundary" {
+			var generation uint64
+			if i.state != nil {
+				generation = i.state.Load().generation
+			}
 			ctx, cancel := context.WithTimeout(i.ctx, expectedContextTimeout)
 			result := audit.ResolveExpectedContext(ctx, work.target)
 			cancel()
@@ -177,6 +188,11 @@ func (i *expectedContextInspector) run() {
 			observation.Status = result.Status
 			observation.Reason = result.Reason
 			observation.ObservedAt = result.At
+			if i.state != nil && generation != i.state.Load().generation {
+				// ponytail: shared generation rejects inspections spanning any boundary;
+				// per-dimension generations only if this conservative rejection matters.
+				observation.Status, observation.Reason, observation.ExpectedContext = "unavailable", "host_state_changed_during_inspection", ""
+			}
 		}
 		work.request.Observation = observation
 		if err := i.store.PutExpectedContextObservation(work.request); err != nil {
@@ -261,7 +277,7 @@ func run(ctx context.Context, client delivery.Client, store *spool.Spool, interv
 	defer stats.log(logger)
 	runCtx, cancel := context.WithCancel(ctx)
 	eventQueue := make(chan queuedEvent, auditEventQueueSize)
-	expectedInspector := newExpectedContextInspector(runCtx, store, agentVersion, logger)
+	expectedInspector := newExpectedContextInspector(runCtx, store, agentVersion, logger, hostState)
 	eventDone := make(chan struct{})
 	go func() {
 		defer close(eventDone)
@@ -271,7 +287,7 @@ func run(ctx context.Context, client delivery.Client, store *spool.Spool, interv
 				continue
 			}
 			stats.spooled.Add(1)
-			expectedInspector.enqueue(queued.hostID, queued.bootID, queued.hostObservedAt, queued.event)
+			expectedInspector.enqueue(queued.hostID, queued.bootID, queued.hostObservedAt, queued.event, queued.checkpointInvalidatedFields...)
 		}
 	}()
 	defer func() {
@@ -439,6 +455,11 @@ func invalidateHostState(state *atomic.Pointer[observedHost], fields ...string) 
 				next.observedAt = time.Time{}
 			case "ports":
 				next.metadata.SELinux.Policy.PortInventory = &metadata.PortInventory{Status: "unknown"}
+			case "file_context_mappings":
+				next.metadata.SELinux.Policy.FileContextMappingsStatus = "unknown"
+				next.metadata.SELinux.Policy.FileContexts = nil
+				next.metadata.SELinux.Policy.LocalFileContextMappings = nil
+				next.metadata.SELinux.Policy.FileContextEquivalences = nil
 			}
 		}
 		slices.Sort(next.checkpointInvalidatedFields)
@@ -461,6 +482,8 @@ func checkpointDimensionObserved(state metadata.SELinuxMetadata, field string) b
 		return state.Enforcement == metadata.Enforcing || state.Enforcement == metadata.Permissive || state.Enforcement == metadata.Disabled
 	case "ports":
 		return state.Policy.PortInventory != nil && state.Policy.PortInventory.Status == "observed" && state.Policy.PortInventory.Mappings != nil
+	case "file_context_mappings":
+		return state.Policy.FileContextMappingsStatus == "observed" && state.Policy.FileContexts != nil && state.Policy.LocalFileContextMappings != nil && state.Policy.FileContextEquivalences != nil
 	case "booleans":
 		if state.BooleanStatus != "observed" {
 			return false

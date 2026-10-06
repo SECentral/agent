@@ -76,7 +76,7 @@ func (r IngestRequest) Validate() error {
 		details = append(details, ValidationDetail{Path: "agent.version", Code: "required"})
 	}
 	for i, field := range r.CheckpointInvalidatedFields {
-		if !slices.Contains([]string{"enforcement", "ports", "policy_identity", "booleans"}, field) || slices.Contains(r.CheckpointInvalidatedFields[:i], field) {
+		if !slices.Contains([]string{"enforcement", "ports", "policy_identity", "booleans", "file_context_mappings"}, field) || slices.Contains(r.CheckpointInvalidatedFields[:i], field) {
 			details = append(details, ValidationDetail{Path: "checkpoint_invalidated_fields", Code: "invalid_checkpoint_fields"})
 		}
 	}

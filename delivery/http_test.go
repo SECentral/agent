@@ -245,7 +245,7 @@ func TestSendPendingSeparatesHostObservationTimes(t *testing.T) {
 func TestSendPendingSeparatesAndPreservesCheckpointTrust(t *testing.T) {
 	store, _ := testSpool(t)
 	item := testItem(2, "host")
-	item.CheckpointInvalidatedFields = []string{"booleans", "enforcement", "policy_identity", "ports"}
+	item.CheckpointInvalidatedFields = []string{"booleans", "enforcement", "file_context_mappings", "policy_identity", "ports"}
 	if err := store.Put(item); err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ func TestSendPendingSeparatesAndPreservesCheckpointTrust(t *testing.T) {
 		if len(request.Events) != 1 || request.HostObservedAt == nil {
 			t.Errorf("incompatible checkpoint trust was combined: %#v", request)
 		}
-		if strings.Join(request.CheckpointInvalidatedFields, ",") == "booleans,enforcement,policy_identity,ports" {
+		if strings.Join(request.CheckpointInvalidatedFields, ",") == "booleans,enforcement,file_context_mappings,policy_identity,ports" {
 			masked.Add(1)
 		}
 		w.WriteHeader(http.StatusAccepted)

@@ -60,10 +60,13 @@ type SELinuxBoolean struct {
 }
 
 type PolicyMetadata struct {
-	Package       *PolicyPackage       `json:"package,omitempty"`
-	Modules       []PolicyModule       `json:"modules,omitempty"`
-	FileContexts  []FileContextMapping `json:"file_contexts,omitempty"`
-	PortInventory *PortInventory       `json:"port_inventory,omitempty"`
+	Package                   *PolicyPackage           `json:"package,omitempty"`
+	Modules                   []PolicyModule           `json:"modules,omitempty"`
+	FileContexts              []FileContextMapping     `json:"file_contexts"`
+	FileContextMappingsStatus string                   `json:"file_context_mappings_status,omitempty"`
+	LocalFileContextMappings  []FileContextMapping     `json:"local_file_context_mappings"`
+	FileContextEquivalences   []FileContextEquivalence `json:"file_context_equivalences"`
+	PortInventory             *PortInventory           `json:"port_inventory,omitempty"`
 	// CustomModules is retained for protocol compatibility with older agents.
 	CustomModules []PolicyModule `json:"custom_modules,omitempty"`
 }
@@ -107,6 +110,12 @@ type FileContextMapping struct {
 	Pattern    string `json:"pattern"`
 	FileType   string `json:"file_type,omitempty"`
 	Context    string `json:"context"`
+	Provenance string `json:"provenance"`
+}
+
+type FileContextEquivalence struct {
+	Source     string `json:"source"`
+	Target     string `json:"target"`
 	Provenance string `json:"provenance"`
 }
 
@@ -315,28 +324,11 @@ func collectPolicyMetadata(diagnostics []error) (PolicyMetadata, []error) {
 		policy.Modules = parsePolicyModules(string(value))
 		policy.Modules, diagnostics = annotateModuleProvenance(policy.Modules, diagnostics)
 	}
-	value, err = exec.Command("semanage", "fcontext", "-l").Output()
-	if err != nil {
-		diagnostics = append(diagnostics, errors.New("file contexts: semanage query unavailable"))
-	} else {
-		policy.FileContexts, diagnostics = parseFileContexts(string(value), diagnostics)
-		localValue, localErr := exec.Command("semanage", "fcontext", "-l", "-C").Output()
-		if localErr != nil {
-			diagnostics = append(diagnostics, errors.New("local file contexts: semanage query unavailable"))
-		} else {
-			local, localDiagnostics := parseFileContexts(string(localValue), diagnostics)
-			diagnostics = localDiagnostics
-			localKeys := make(map[string]struct{}, len(local))
-			for _, mapping := range local {
-				localKeys[fileContextKey(mapping)] = struct{}{}
-			}
-			for index, mapping := range policy.FileContexts {
-				if _, found := localKeys[fileContextKey(mapping)]; found {
-					policy.FileContexts[index].Provenance = "custom"
-				}
-			}
-		}
-	}
+	policy, diagnostics = collectFileContextMappings(policy, func(name string, args ...string) ([]byte, error) {
+		command := exec.Command(name, args...)
+		command.Env = append(os.Environ(), "LC_ALL=C", "LANGUAGE=C")
+		return command.Output()
+	}, diagnostics)
 	policy.PortInventory, diagnostics = collectPortInventory(diagnostics)
 	return policy, diagnostics
 }

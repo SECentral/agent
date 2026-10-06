@@ -37,7 +37,7 @@ func TestReplayRequestSpoolsEvents(t *testing.T) {
 		HostID:                      "host",
 		BootID:                      "boot",
 		HostObservedAt:              &observedAt,
-		CheckpointInvalidatedFields: []string{"booleans", "policy_identity", "ports"},
+		CheckpointInvalidatedFields: []string{"booleans", "file_context_mappings", "policy_identity", "ports"},
 		Events:                      []audit.Event{event},
 	}
 	requestFile := t.TempDir() + "/request.json"
@@ -59,7 +59,7 @@ func TestReplayRequestSpoolsEvents(t *testing.T) {
 	if err != nil || len(result.Entries) != 1 {
 		t.Fatalf("pending = %#v, err = %v", result, err)
 	}
-	if strings.Join(result.Entries[0].Item.CheckpointInvalidatedFields, ",") != "booleans,policy_identity,ports" {
+	if strings.Join(result.Entries[0].Item.CheckpointInvalidatedFields, ",") != "booleans,file_context_mappings,policy_identity,ports" {
 		t.Fatal("replay dropped scoped trust")
 	}
 }
@@ -231,7 +231,7 @@ func authoritativeCheckpoint() observedHost {
 	return observedHost{observedAt: time.Unix(100, 0), metadata: metadata.HostMetadata{SELinux: metadata.SELinuxMetadata{
 		PolicyIdentity: "sha256:" + strings.Repeat("a", 64), Enforcement: metadata.Enforcing, BooleanStatus: "observed",
 		Booleans: []metadata.SELinuxBoolean{{Name: "nis_enabled", Status: "observed", Current: new(false)}},
-		Policy:   metadata.PolicyMetadata{PortInventory: &metadata.PortInventory{Status: "observed", Mappings: []metadata.PortMapping{}}},
+		Policy:   metadata.PolicyMetadata{PortInventory: &metadata.PortInventory{Status: "observed", Mappings: []metadata.PortMapping{}}, FileContextMappingsStatus: "observed", FileContexts: []metadata.FileContextMapping{}, LocalFileContextMappings: []metadata.FileContextMapping{}, FileContextEquivalences: []metadata.FileContextEquivalence{}},
 	}}}
 }
 
@@ -447,6 +447,100 @@ func fileContextAVCEvent(sequence uint32) audit.Event {
 		})
 	}
 	return event
+}
+
+func TestMappingInvalidationAndLateRefreshPreserveOtherDimensions(t *testing.T) {
+	state := &atomic.Pointer[observedHost]{}
+	initial := authoritativeCheckpoint()
+	state.Store(&initial)
+	first := invalidateHostState(state, "file_context_mappings")
+	if first.metadata.SELinux.PolicyIdentity != initial.metadata.SELinux.PolicyIdentity || first.metadata.SELinux.BooleanStatus != "observed" || first.metadata.SELinux.Enforcement != metadata.Enforcing || !first.observedAt.Equal(initial.observedAt) {
+		t.Fatal("mapping write destroyed unrelated evidence")
+	}
+	second := invalidateHostState(state, "file_context_mappings")
+	partial := authoritativeCheckpoint()
+	partial.metadata.SELinux.Policy.FileContextMappingsStatus = "partial"
+	if _, ok := publishHostState(state, second, partial); !ok || len(state.Load().checkpointInvalidatedFields) != 1 {
+		t.Fatal("partial mapping inventory reconciled uncertainty")
+	}
+	current := state.Load()
+	full := authoritativeCheckpoint()
+	if _, ok := publishHostState(state, current, full); !ok {
+		t.Fatal("final mapping refresh rejected")
+	}
+	if _, ok := publishHostState(state, first, partial); ok {
+		t.Fatal("late intermediate mapping restored")
+	}
+	if len(state.Load().checkpointInvalidatedFields) != 0 || initial.metadata.SELinux.Policy.FileContextMappingsStatus != "observed" {
+		t.Fatal("final or immutable state changed")
+	}
+}
+
+func TestMappingWindowDoesNotResolveExpectedLabel(t *testing.T) {
+	store, err := spool.New(t.TempDir(), spool.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolverDir := t.TempDir()
+	marker := filepath.Join(resolverDir, "called")
+	script := "#!/bin/sh\ntouch \"$MARKER\"\nprintf 'system_u:object_r:httpd_sys_content_t:s0\\n'\n"
+	if err := os.WriteFile(filepath.Join(resolverDir, "matchpathcon"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MARKER", marker)
+	t.Setenv("PATH", resolverDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	inspector := newExpectedContextInspector(t.Context(), store, "test", newLogger(false))
+	inspector.enqueue("host", "boot", nil, fileContextAVCEvent(1), "file_context_mappings")
+	inspector.close()
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("uncertain mapping window invoked matchpathcon")
+	}
+	pending, err := store.ExpectedContextPending()
+	if err != nil || len(pending.Entries) != 1 {
+		t.Fatal(err)
+	}
+	if got := pending.Entries[0].Item.Observation; got.Status != "unavailable" || got.Reason != "file_context_mapping_boundary" {
+		t.Fatal(got)
+	}
+}
+
+func TestExpectedInspectionCrossingBoundaryIsNotPublishedAsResolved(t *testing.T) {
+	store, err := spool.New(t.TempDir(), spool.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolverDir := t.TempDir()
+	marker := filepath.Join(resolverDir, "started")
+	if err := os.WriteFile(filepath.Join(resolverDir, "matchpathcon"), []byte("#!/bin/sh\ntouch \"$MARKER\"\nsleep 0.3\nprintf 'system_u:object_r:httpd_sys_content_t:s0\\n'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MARKER", marker)
+	t.Setenv("PATH", resolverDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	state := &atomic.Pointer[observedHost]{}
+	initial := authoritativeCheckpoint()
+	state.Store(&initial)
+	inspector := newExpectedContextInspector(t.Context(), store, "test", newLogger(false), state)
+	inspector.enqueue("host", "boot", nil, fileContextAVCEvent(1))
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			inspector.close()
+			t.Fatal("resolver did not start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	invalidateHostState(state, "file_context_mappings")
+	inspector.close()
+	pending, err := store.ExpectedContextPending()
+	if err != nil || len(pending.Entries) != 1 {
+		t.Fatal(err)
+	}
+	if got := pending.Entries[0].Item.Observation; got.Status != "unavailable" || got.ExpectedContext != "" {
+		t.Fatal("obsolete inspection published", got)
+	}
 }
 
 func TestArtifactRequestDoesNotUploadBytesAfterLoadedPolicyChanges(t *testing.T) {

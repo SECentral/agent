@@ -233,13 +233,16 @@ func SuccessfulStateTransitionRecord(message *libaudit.RawAuditMessage) bool {
 // These are dimensions, not replacement values or derived capability names.
 func StateTransitionFields(message *libaudit.RawAuditMessage) []string {
 	if SuccessfulPolicyLoadRecord(message) {
-		return []string{"booleans", "policy_identity", "ports"}
+		return []string{"booleans", "file_context_mappings", "policy_identity", "ports"}
 	}
 	if SuccessfulEnforcementChangeRecord(message) {
 		return []string{"enforcement"}
 	}
 	if SuccessfulPortChangeRecord(message) {
 		return []string{"policy_identity", "ports"}
+	}
+	if SuccessfulFileContextChangeRecord(message) {
+		return []string{"file_context_mappings"}
 	}
 	fields := BooleanChangeFields(message)
 	result, explicit := fields["res"]
@@ -297,23 +300,12 @@ var portContext = regexp.MustCompile(`^system_u:object_r:[A-Za-z_][A-Za-z0-9_]*:
 // PortChangeFields supports only the observed libsemanage port write shape.
 // Delete omits context; modify supplies no old value, even for equal-value writes.
 func PortChangeFields(message *libaudit.RawAuditMessage) map[string]string {
-	if message == nil || message.Type != auparse.AUDIT_USER_MAC_CONFIG_CHANGE {
+	if message == nil || !bytes.Contains(message.Data, []byte("resrc=port")) {
 		return nil
 	}
-	matches := userChangeMessage.FindAllStringSubmatch(string(message.Data), -1)
-	if len(matches) != 1 || !userChangeBody.MatchString(matches[0][1]) {
+	fields := userChangeFields(message)
+	if fields == nil {
 		return nil
-	}
-	fields := make(map[string]string)
-	for _, field := range userChangeField.FindAllStringSubmatch(matches[0][1], -1) {
-		key, value := field[1], field[2]
-		switch key {
-		case "resrc", "op", "lport", "proto", "tcontext", "res", "success", "old_tcontext", "old_type":
-			if _, duplicate := fields[key]; duplicate {
-				return nil
-			}
-			fields[key] = value
-		}
 	}
 	if fields["resrc"] != "port" || (fields["op"] != "add" && fields["op"] != "modify" && fields["op"] != "delete") ||
 		(fields["proto"] != "6" && fields["proto"] != "17") || !portNumber.MatchString(fields["lport"]) {
@@ -335,10 +327,29 @@ func PortChangeFields(message *libaudit.RawAuditMessage) map[string]string {
 	} else if !portContext.MatchString(fields["tcontext"]) {
 		return nil
 	}
-	for _, key := range []string{"success", "old_tcontext", "old_type"} {
+	for _, key := range []string{"success", "old_tcontext", "old_type", "tglob", "ftype", "sglob"} {
 		if _, present := fields[key]; present {
 			return nil
 		}
+	}
+	return fields
+}
+
+func userChangeFields(message *libaudit.RawAuditMessage) map[string]string {
+	if message == nil || message.Type != auparse.AUDIT_USER_MAC_CONFIG_CHANGE {
+		return nil
+	}
+	matches := userChangeMessage.FindAllStringSubmatch(string(message.Data), -1)
+	if len(matches) != 1 || !userChangeBody.MatchString(matches[0][1]) {
+		return nil
+	}
+	fields := make(map[string]string)
+	for _, field := range userChangeField.FindAllStringSubmatch(matches[0][1], -1) {
+		key, value := field[1], field[2]
+		if _, duplicate := fields[key]; duplicate {
+			return nil
+		}
+		fields[key] = value
 	}
 	return fields
 }
@@ -456,7 +467,7 @@ func eventCategory(records []Record) (Category, bool) {
 		}
 	}
 	for _, record := range records {
-		if record.Type == auparse.AUDIT_MAC_POLICY_LOAD || record.Type == auparse.AUDIT_MAC_STATUS || BooleanChangeFields(&libaudit.RawAuditMessage{Type: record.Type, Data: record.Raw}) != nil || PortChangeRecord(&libaudit.RawAuditMessage{Type: record.Type, Data: record.Raw}) {
+		if record.Type == auparse.AUDIT_MAC_POLICY_LOAD || record.Type == auparse.AUDIT_MAC_STATUS || BooleanChangeFields(&libaudit.RawAuditMessage{Type: record.Type, Data: record.Raw}) != nil || PortChangeRecord(&libaudit.RawAuditMessage{Type: record.Type, Data: record.Raw}) || FileContextChangeRecord(&libaudit.RawAuditMessage{Type: record.Type, Data: record.Raw}) {
 			return CategorySELinuxAdministrative, true
 		}
 	}
