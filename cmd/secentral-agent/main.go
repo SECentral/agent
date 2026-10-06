@@ -342,15 +342,11 @@ func run(ctx context.Context, client delivery.Client, store *spool.Spool, interv
 				return result.err
 			}
 			stats.received.Add(1)
-			if audit.SuccessfulStateTransitionRecord(result.message) {
+			if fields := audit.StateTransitionFields(result.message); len(fields) > 0 {
 				// Invalidate on receipt, not event completion, so a timeout cannot
 				// let a later AVC inherit the pre-transition state checkpoint.
-				policyChanged := result.message.Type != auparse.AUDIT_MAC_STATUS
-				fields := []string{"enforcement"}
-				if result.message.Type == auparse.AUDIT_USER_MAC_CONFIG_CHANGE {
-					fields = []string{"ports", "policy_identity"}
-				}
-				unknown := invalidateHostState(hostState, policyChanged && result.message.Type != auparse.AUDIT_USER_MAC_CONFIG_CHANGE, fields...)
+				policyChanged := slices.Contains(fields, "policy_identity")
+				unknown := invalidateHostState(hostState, fields...)
 				logger.Info("SELinux state boundary observed", "record_type", result.message.Type.String(), "agent_received_at", time.Now().UTC(), "state_generation", unknown.generation, "policy_invalidated", policyChanged, "checkpoint_invalidated_fields", unknown.checkpointInvalidatedFields)
 				requestPolicyRefresh(refreshRequests)
 			}
@@ -411,44 +407,72 @@ func refreshHostState(ctx context.Context, client delivery.Client, state *atomic
 
 func publishHostState(state *atomic.Pointer[observedHost], previous *observedHost, next observedHost) (*observedHost, bool) {
 	next.generation = previous.generation
+	// A completed collection only closes uncertainty for dimensions it observed.
+	for _, field := range previous.checkpointInvalidatedFields {
+		if !checkpointDimensionObserved(next.metadata.SELinux, field) {
+			next.checkpointInvalidatedFields = append(next.checkpointInvalidatedFields, field)
+		}
+	}
 	updated := &next
 	return updated, state.CompareAndSwap(previous, updated)
 }
 
-func invalidateHostState(state *atomic.Pointer[observedHost], policyChanged bool, fields ...string) *observedHost {
+func invalidateHostState(state *atomic.Pointer[observedHost], fields ...string) *observedHost {
 	for {
 		previous := state.Load()
 		next := *previous
 		next.generation++
-		if policyChanged {
-			next.metadata.SELinux.PolicyIdentity = ""
-			next.metadata.SELinux.BooleanStatus = "unknown"
-			next.metadata.SELinux.Booleans = nil
-			next.observedAt = time.Time{}
-			next.checkpointInvalidatedFields = nil
-		} else {
-			if len(fields) == 0 {
-				fields = []string{"enforcement"}
+		next.checkpointInvalidatedFields = slices.Clone(previous.checkpointInvalidatedFields)
+		for _, field := range fields {
+			if !slices.Contains(next.checkpointInvalidatedFields, field) {
+				next.checkpointInvalidatedFields = append(next.checkpointInvalidatedFields, field)
 			}
-			next.checkpointInvalidatedFields = slices.Clone(previous.checkpointInvalidatedFields)
-			for _, field := range fields {
-				if !slices.Contains(next.checkpointInvalidatedFields, field) {
-					next.checkpointInvalidatedFields = append(next.checkpointInvalidatedFields, field)
-				}
-				switch field {
-				case "enforcement":
-					next.metadata.SELinux.Enforcement = metadata.Unknown
-				case "policy_identity":
-					next.metadata.SELinux.PolicyIdentity = ""
-				case "ports":
-					next.metadata.SELinux.Policy.PortInventory = &metadata.PortInventory{Status: "unknown"}
-				}
+			switch field {
+			case "enforcement":
+				next.metadata.SELinux.Enforcement = metadata.Unknown
+			case "policy_identity":
+				next.metadata.SELinux.PolicyIdentity = ""
+			case "booleans":
+				next.metadata.SELinux.BooleanStatus = "unknown"
+				next.metadata.SELinux.Booleans = nil
+				// Preserve the accepted stronger policy/boolean association boundary.
+				next.observedAt = time.Time{}
+			case "ports":
+				next.metadata.SELinux.Policy.PortInventory = &metadata.PortInventory{Status: "unknown"}
 			}
-			slices.Sort(next.checkpointInvalidatedFields)
 		}
+		slices.Sort(next.checkpointInvalidatedFields)
 		if state.CompareAndSwap(previous, &next) {
 			return &next
 		}
+	}
+}
+
+func checkpointDimensionObserved(state metadata.SELinuxMetadata, field string) bool {
+	switch field {
+	case "policy_identity":
+		text, ok := strings.CutPrefix(state.PolicyIdentity, "sha256:")
+		if !ok || len(text) != 64 {
+			return false
+		}
+		_, err := hex.DecodeString(text)
+		return err == nil && strings.ToLower(text) == text
+	case "enforcement":
+		return state.Enforcement == metadata.Enforcing || state.Enforcement == metadata.Permissive || state.Enforcement == metadata.Disabled
+	case "ports":
+		return state.Policy.PortInventory != nil && state.Policy.PortInventory.Status == "observed" && state.Policy.PortInventory.Mappings != nil
+	case "booleans":
+		if state.BooleanStatus != "observed" {
+			return false
+		}
+		for _, entry := range state.Booleans {
+			if entry.Status != "observed" || entry.Current == nil {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
 	}
 }
 

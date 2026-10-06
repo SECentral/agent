@@ -65,3 +65,21 @@ func BenchmarkSuccessfulPortChangeRecord(b *testing.B) {
 		SuccessfulPortChangeRecord(message)
 	}
 }
+
+func TestStateTransitionDimensionContract(t *testing.T) {
+	for _, test := range []struct {
+		kind        auparse.AuditMessageType
+		raw, fields string
+	}{
+		{auparse.AUDIT_MAC_POLICY_LOAD, "audit(1791285274.360:130): res=1", "booleans,policy_identity,ports"},
+		{auparse.AUDIT_MAC_CONFIG_CHANGE, "audit(1791285274.360:130): bool=nis_enabled val=1 old_val=0", "booleans,policy_identity"},
+		{auparse.AUDIT_MAC_STATUS, "audit(1791285274.360:130): enforcing=0 old_enforcing=1 enabled=1 old-enabled=1 lsm=selinux res=1", "enforcement"},
+		{auparse.AUDIT_USER_MAC_CONFIG_CHANGE, string(portMessage("resrc=port op=delete lport=23451 proto=6").Data), "policy_identity,ports"},
+		{auparse.AUDIT_MAC_POLICY_LOAD, "audit(1791285274.360:130): res=0", ""},
+	} {
+		fields := StateTransitionFields(&libaudit.RawAuditMessage{Type: test.kind, Data: []byte(test.raw)})
+		if strings.Join(fields, ",") != test.fields {
+			t.Fatalf("%v fields=%v want=%s", test.kind, fields, test.fields)
+		}
+	}
+}

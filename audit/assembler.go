@@ -226,12 +226,27 @@ func BooleanChangeFields(message *libaudit.RawAuditMessage) map[string]string {
 }
 
 func SuccessfulStateTransitionRecord(message *libaudit.RawAuditMessage) bool {
-	if SuccessfulPolicyLoadRecord(message) || SuccessfulEnforcementChangeRecord(message) || SuccessfulPortChangeRecord(message) {
-		return true
+	return len(StateTransitionFields(message)) > 0
+}
+
+// StateTransitionFields is the receipt-side trust contract for validated shapes.
+// These are dimensions, not replacement values or derived capability names.
+func StateTransitionFields(message *libaudit.RawAuditMessage) []string {
+	if SuccessfulPolicyLoadRecord(message) {
+		return []string{"booleans", "policy_identity", "ports"}
+	}
+	if SuccessfulEnforcementChangeRecord(message) {
+		return []string{"enforcement"}
+	}
+	if SuccessfulPortChangeRecord(message) {
+		return []string{"policy_identity", "ports"}
 	}
 	fields := BooleanChangeFields(message)
 	result, explicit := fields["res"]
-	return fields != nil && fields["val"] != fields["old_val"] && (!explicit || result == "1")
+	if fields != nil && fields["val"] != fields["old_val"] && (!explicit || result == "1") {
+		return []string{"booleans", "policy_identity"}
+	}
+	return nil
 }
 
 // EnforcementChangeFields recognizes the tested enabled SELinux runtime shape.

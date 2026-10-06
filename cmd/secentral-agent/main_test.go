@@ -37,7 +37,7 @@ func TestReplayRequestSpoolsEvents(t *testing.T) {
 		HostID:                      "host",
 		BootID:                      "boot",
 		HostObservedAt:              &observedAt,
-		CheckpointInvalidatedFields: []string{"policy_identity", "ports"},
+		CheckpointInvalidatedFields: []string{"booleans", "policy_identity", "ports"},
 		Events:                      []audit.Event{event},
 	}
 	requestFile := t.TempDir() + "/request.json"
@@ -59,7 +59,7 @@ func TestReplayRequestSpoolsEvents(t *testing.T) {
 	if err != nil || len(result.Entries) != 1 {
 		t.Fatalf("pending = %#v, err = %v", result, err)
 	}
-	if strings.Join(result.Entries[0].Item.CheckpointInvalidatedFields, ",") != "policy_identity,ports" {
+	if strings.Join(result.Entries[0].Item.CheckpointInvalidatedFields, ",") != "booleans,policy_identity,ports" {
 		t.Fatal("replay dropped scoped trust")
 	}
 }
@@ -72,7 +72,7 @@ func TestPolicyLoadInvalidatesIdentityAndRejectsStaleHeartbeat(t *testing.T) {
 	})
 	staleHeartbeat := state.Load()
 
-	unknown := invalidateHostState(state, true)
+	unknown := invalidateHostState(state, "booleans", "policy_identity", "ports")
 	if unknown.generation != 1 || unknown.metadata.SELinux.PolicyIdentity != "" || !unknown.observedAt.IsZero() || unknown.metadata.SELinux.Booleans != nil || unknown.metadata.SELinux.BooleanStatus != "unknown" {
 		t.Fatalf("policy was not invalidated: %#v", unknown)
 	}
@@ -81,7 +81,7 @@ func TestPolicyLoadInvalidatesIdentityAndRejectsStaleHeartbeat(t *testing.T) {
 	}
 
 	refreshE1 := state.Load()
-	invalidateHostState(state, true)
+	invalidateHostState(state, "booleans", "policy_identity", "ports")
 	if _, published := publishHostState(state, refreshE1, observedHost{metadata: metadata.HostMetadata{SELinux: metadata.SELinuxMetadata{PolicyIdentity: "sha256:obsolete"}}}); published {
 		t.Fatal("an obsolete refresh restored policy after a second load")
 	}
@@ -128,7 +128,7 @@ func TestPolicyInvalidationContinuesWhileHeartbeatDeliveryIsBlocked(t *testing.T
 		t.Fatal("heartbeat did not reach the blocked delivery")
 	}
 
-	unknown := invalidateHostState(state, true)
+	unknown := invalidateHostState(state, "booleans", "policy_identity", "ports")
 	if unknown.metadata.SELinux.PolicyIdentity != "" {
 		t.Fatal("policy identity remained usable while heartbeat delivery was blocked")
 	}
@@ -143,7 +143,7 @@ func TestEnforcementInvalidationPreservesPolicyAndRejectsLatePermissiveRefresh(t
 		PolicyIdentity: "sha256:stable", Enforcement: metadata.Enforcing, BooleanStatus: "observed",
 		Booleans: []metadata.SELinuxBoolean{{Name: "httpd_can_network_connect", Current: new(true)}}}}, observedAt: time.Unix(100, 0)}
 	state.Store(initial)
-	unknown := invalidateHostState(state, false)
+	unknown := invalidateHostState(state, "enforcement")
 	if unknown.metadata.SELinux.Enforcement != metadata.Unknown || unknown.generation != 1 {
 		t.Fatalf("mode not invalidated: %#v", unknown)
 	}
@@ -154,7 +154,7 @@ func TestEnforcementInvalidationPreservesPolicyAndRejectsLatePermissiveRefresh(t
 		t.Fatal("old enforcement reference remained trusted")
 	}
 	permissiveRefresh := state.Load()
-	invalidateHostState(state, false)
+	invalidateHostState(state, "enforcement")
 	current := state.Load()
 	refreshed := observedHost{metadata: initial.metadata, observedAt: time.Unix(104, 0)}
 	if _, published := publishHostState(state, current, refreshed); !published {
@@ -195,18 +195,18 @@ func TestCheckpointTimestampIsAfterStateCollection(t *testing.T) {
 func TestPortInvalidationRacePreservesOtherDimensionsAndCombinesMasks(t *testing.T) {
 	state := &atomic.Pointer[observedHost]{}
 	initial := &observedHost{metadata: metadata.HostMetadata{SELinux: metadata.SELinuxMetadata{
-		PolicyIdentity: "sha256:old", Enforcement: metadata.Enforcing, BooleanStatus: "observed",
+		PolicyIdentity: "sha256:" + strings.Repeat("a", 64), Enforcement: metadata.Enforcing, BooleanStatus: "observed",
 		Booleans: []metadata.SELinuxBoolean{{Name: "nis_enabled", Current: new(false)}},
-		Policy:   metadata.PolicyMetadata{PortInventory: &metadata.PortInventory{Status: "observed"}},
+		Policy:   metadata.PolicyMetadata{PortInventory: &metadata.PortInventory{Status: "observed", Mappings: []metadata.PortMapping{}}},
 	}}, observedAt: time.Unix(100, 0)}
 	state.Store(initial)
-	first := invalidateHostState(state, false, "ports", "policy_identity")
+	first := invalidateHostState(state, "ports", "policy_identity")
 	if first.metadata.SELinux.PolicyIdentity != "" || first.metadata.SELinux.Policy.PortInventory.Status != "unknown" ||
 		first.metadata.SELinux.Enforcement != metadata.Enforcing || first.metadata.SELinux.BooleanStatus != "observed" ||
 		!first.observedAt.Equal(initial.observedAt) || len(first.metadata.SELinux.Booleans) != 1 {
 		t.Fatalf("wrong scoped state: %#v", first)
 	}
-	second := invalidateHostState(state, false, "ports", "policy_identity")
+	second := invalidateHostState(state, "ports", "policy_identity")
 	final := observedHost{metadata: initial.metadata, observedAt: time.Unix(104, 0)}
 	if _, ok := publishHostState(state, second, final); !ok {
 		t.Fatal("final refresh rejected")
@@ -214,8 +214,8 @@ func TestPortInvalidationRacePreservesOtherDimensionsAndCombinesMasks(t *testing
 	if _, ok := publishHostState(state, first, final); ok {
 		t.Fatal("late intermediate inventory published")
 	}
-	mode := invalidateHostState(state, false)
-	combined := invalidateHostState(state, false, "ports", "policy_identity")
+	mode := invalidateHostState(state, "enforcement")
+	combined := invalidateHostState(state, "ports", "policy_identity")
 	if strings.Join(combined.checkpointInvalidatedFields, ",") != "enforcement,policy_identity,ports" {
 		t.Fatal("mask was overwritten")
 	}
@@ -224,6 +224,65 @@ func TestPortInvalidationRacePreservesOtherDimensionsAndCombinesMasks(t *testing
 	}
 	if initial.metadata.SELinux.Policy.PortInventory.Status != "observed" {
 		t.Fatal("historical ports mutated")
+	}
+}
+
+func authoritativeCheckpoint() observedHost {
+	return observedHost{observedAt: time.Unix(100, 0), metadata: metadata.HostMetadata{SELinux: metadata.SELinuxMetadata{
+		PolicyIdentity: "sha256:" + strings.Repeat("a", 64), Enforcement: metadata.Enforcing, BooleanStatus: "observed",
+		Booleans: []metadata.SELinuxBoolean{{Name: "nis_enabled", Status: "observed", Current: new(false)}},
+		Policy:   metadata.PolicyMetadata{PortInventory: &metadata.PortInventory{Status: "observed", Mappings: []metadata.PortMapping{}}},
+	}}}
+}
+
+func TestTrustDimensionsComposeAndReconcileOnlyAuthoritativeCollection(t *testing.T) {
+	for _, fields := range [][]string{{"enforcement", "ports", "policy_identity"}, {"ports", "policy_identity", "enforcement"},
+		{"booleans", "policy_identity", "enforcement"}, {"booleans", "policy_identity", "ports", "enforcement"}} {
+		state := &atomic.Pointer[observedHost]{}
+		initial := authoritativeCheckpoint()
+		state.Store(&initial)
+		for _, field := range fields {
+			invalidateHostState(state, field)
+		}
+		previous := state.Load()
+		partial := authoritativeCheckpoint()
+		partial.observedAt = time.Unix(104, 0)
+		partial.metadata.SELinux.Enforcement = metadata.Unknown
+		partial.metadata.SELinux.Policy.PortInventory.Status = "partial"
+		if _, ok := publishHostState(state, previous, partial); !ok {
+			t.Fatal("partial current-generation observation rejected")
+		}
+		expected := "enforcement"
+		if strings.Contains(strings.Join(fields, ","), "ports") {
+			expected += ",ports"
+		}
+		if got := strings.Join(state.Load().checkpointInvalidatedFields, ","); got != expected {
+			t.Fatalf("partial collection mask=%s want=%s", got, expected)
+		}
+		current := state.Load()
+		full := authoritativeCheckpoint()
+		full.observedAt = time.Unix(105, 0)
+		if _, ok := publishHostState(state, current, full); !ok || len(state.Load().checkpointInvalidatedFields) != 0 {
+			t.Fatal("authoritative refresh did not close old interval")
+		}
+		invalidateHostState(state, "enforcement")
+		if got := strings.Join(state.Load().checkpointInvalidatedFields, ","); got != "enforcement" {
+			t.Fatal("old masks accumulated across reconciliation")
+		}
+		if initial.metadata.SELinux.Policy.PortInventory.Status != "observed" {
+			t.Fatal("historical inventory mutated")
+		}
+	}
+}
+
+func BenchmarkCheckpointMaskApplication(b *testing.B) {
+	state := &atomic.Pointer[observedHost]{}
+	initial := authoritativeCheckpoint()
+	b.ReportAllocs()
+	for b.Loop() {
+		state.Store(&initial)
+		invalidateHostState(state, "enforcement")
+		invalidateHostState(state, "ports", "policy_identity")
 	}
 }
 
