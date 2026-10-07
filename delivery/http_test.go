@@ -3,11 +3,13 @@ package delivery
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -362,6 +364,175 @@ func TestSendPendingDeliversHealthyEntriesWithDiagnostics(t *testing.T) {
 	result, err := (Client{Endpoint: server.URL, IngestionKey: "secret"}).SendPending(t.Context(), store)
 	if err != nil || result.Delivered != 1 || len(result.Diagnostics) != 1 {
 		t.Fatalf("result = %#v, err = %v", result, err)
+	}
+}
+
+func TestPoisonEventBlastRadiusAndLaterProgress(t *testing.T) {
+	for _, mode := range []string{"permanent_422", "transient_500", "locally_invalid"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			store, err := spool.New(root, spool.Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for sequence := uint32(1); sequence <= 101; sequence++ {
+				item := testItem(sequence, "host")
+				item.Event.AgentReceivedAt = item.Event.ID.Timestamp
+				if sequence == 1 {
+					// Locally valid protocol metadata, but server category validation requires AVC.
+					item.Event.Records[0].Type = auparse.AUDIT_SYSCALL
+					item.Event.Records[0].TypeName = "SYSCALL"
+					if mode == "locally_invalid" {
+						item.Event.Records[0].Position = 99
+					}
+				}
+				if err := store.Put(item); err != nil {
+					t.Fatal(err)
+				}
+			}
+			spoolBytes := func() int64 {
+				var total int64
+				for _, directory := range []string{"pending", "blocked"} {
+					entries, err := os.ReadDir(filepath.Join(root, directory))
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, entry := range entries {
+						info, err := entry.Info()
+						if err != nil {
+							t.Fatal(err)
+						}
+						total += info.Size()
+					}
+				}
+				return total
+			}
+			initialBytes := spoolBytes()
+			if mode == "permanent_422" {
+				for _, sequence := range []uint32{1, 101} {
+					item := testItem(sequence, "host")
+					observation := protocol.ExpectedContextObservationRequest{
+						SchemaVersion: protocol.ExpectedContextSchemaVersion, Agent: item.Agent, HostID: item.HostID, BootID: item.BootID,
+						AuditEvent:  protocol.AuditEventReference{Timestamp: item.Event.ID.Timestamp, Sequence: sequence},
+						Observation: protocol.ExpectedContextObservation{Path: "/srv/probe", ObjectClass: "file", FileType: "file", Resolver: "matchpathcon", Status: "resolved", ExpectedContext: "system_u:object_r:var_t:s0", ObservedAt: item.Event.ID.Timestamp.Add(time.Second)},
+					}
+					if err := store.PutExpectedContextObservation(observation); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			var mu sync.Mutex
+			var requestSizes []int
+			var acceptedIDs []uint32
+			snapshot := func() ([]int, []uint32) {
+				mu.Lock()
+				defer mu.Unlock()
+				return slices.Clone(requestSizes), slices.Clone(acceptedIDs)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				defer mu.Unlock()
+				if r.URL.Path == "/expected-context-observations" {
+					var observation protocol.ExpectedContextObservationRequest
+					if err := json.NewDecoder(r.Body).Decode(&observation); err != nil {
+						t.Error(err)
+					}
+					if observation.AuditEvent.Sequence == 1 {
+						w.WriteHeader(http.StatusNotFound)
+					} else {
+						w.WriteHeader(http.StatusAccepted)
+					}
+					return
+				}
+				var request protocol.IngestRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				requestSizes = append(requestSizes, len(request.Events))
+				for _, event := range request.Events {
+					if event.ID.Sequence == 1 {
+						status := http.StatusUnprocessableEntity
+						if mode == "transient_500" {
+							status = http.StatusInternalServerError
+						}
+						w.WriteHeader(status)
+						return
+					}
+				}
+				for _, event := range request.Events {
+					acceptedIDs = append(acceptedIDs, event.ID.Sequence)
+				}
+				w.WriteHeader(http.StatusAccepted)
+			}))
+			defer server.Close()
+			client := Client{Endpoint: server.URL, IngestionKey: "secret"}
+			start := time.Now()
+			result, err := client.SendPending(t.Context(), store)
+			sizes, accepted := snapshot()
+			switch mode {
+			case "permanent_422":
+				if _, ok := errors.AsType[*PermanentError](err); !ok || result.Blocked != 100 || result.Delivered != 1 || len(accepted) != 1 || accepted[0] != 101 {
+					t.Fatalf("permanent result=%#v accepted=%v err=%v", result, accepted, err)
+				}
+				if !slices.Equal(sizes, []int{100, 1}) {
+					t.Fatalf("permanent requests=%v", sizes)
+				}
+				observations, err := store.ExpectedContextPending()
+				if err != nil || len(observations.Entries) != 2 {
+					t.Fatalf("optional observations did not wait after primary rejection: %#v, %v", observations, err)
+				}
+			case "transient_500":
+				for range 2 {
+					if err == nil || result.Blocked != 0 || result.Delivered != 0 || result.Pending != 101 {
+						t.Fatalf("transient result=%#v err=%v", result, err)
+					}
+					result, err = client.SendPending(t.Context(), store)
+				}
+				sizes, accepted = snapshot()
+				if err == nil || len(accepted) != 0 || len(sizes) != 3 {
+					t.Fatalf("transient retries=%v accepted=%v err=%v", sizes, accepted, err)
+				}
+			case "locally_invalid":
+				if err != nil || result.Delivered != 100 || len(result.Diagnostics) != 1 || len(accepted) != 100 {
+					t.Fatalf("local result=%#v err=%v", result, err)
+				}
+			}
+			pending, scanErr := store.Pending()
+			blocked, readErr := os.ReadDir(filepath.Join(root, "blocked"))
+			if scanErr != nil || readErr != nil {
+				t.Fatalf("final spool: %v, %v", scanErr, readErr)
+			}
+			wantPending, wantBlocked := 0, 100
+			if mode == "transient_500" {
+				wantPending, wantBlocked = 101, 0
+			} else if mode == "locally_invalid" {
+				wantBlocked = 1
+			}
+			if len(pending.Entries) != wantPending || len(blocked) != wantBlocked {
+				t.Fatalf("pending=%d blocked=%d", len(pending.Entries), len(blocked))
+			}
+			retainedBytes := spoolBytes()
+			if mode == "transient_500" && retainedBytes != initialBytes {
+				t.Fatal("transient retries changed retained spool bytes")
+			}
+			t.Logf("requests=%v accepted=%d pending=%d blocked=%d initial_bytes=%d retained_bytes=%d elapsed=%s", sizes, len(accepted), len(pending.Entries), len(blocked), initialBytes, retainedBytes, time.Since(start))
+			if mode != "transient_500" {
+				// Quarantine is excluded from scheduling: a newly captured tail event passes.
+				item := testItem(102, "host")
+				if err := store.Put(item); err != nil {
+					t.Fatal(err)
+				}
+				result, err = client.SendPending(t.Context(), store)
+				if err != nil || result.Delivered != 1 {
+					t.Fatalf("later progress=%#v err=%v", result, err)
+				}
+				if mode == "permanent_422" && (result.ExpectedContextDelivered != 1 || result.ExpectedContextBlocked != 1) {
+					t.Fatalf("optional primary dependency was not preserved: %#v", result)
+				}
+			}
+		})
 	}
 }
 
