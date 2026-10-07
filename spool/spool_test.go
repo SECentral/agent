@@ -9,10 +9,55 @@ import (
 	"testing"
 	"time"
 
+	libaudit "github.com/elastic/go-libaudit/v2"
 	"github.com/elastic/go-libaudit/v2/auparse"
 	"github.com/secentral/agent/audit"
 	"github.com/secentral/agent/protocol"
 )
+
+func TestSELinuxErrorIdentitySurvivesAssemblySpoolAndProtocol(t *testing.T) {
+	assembler := audit.NewAssembler(audit.DefaultConfig())
+	var events []audit.Event
+	for _, typ := range []auparse.AuditMessageType{auparse.AUDIT_AVC, auparse.AUDIT_SELINUX_ERR, auparse.AUDIT_SYSCALL, auparse.AUDIT_PROCTITLE, auparse.AUDIT_EOE} {
+		var err error
+		events, err = assembler.Push(&libaudit.RawAuditMessage{Type: typ, Data: []byte("audit(100.000:1): supporting evidence")}, time.Unix(100, 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(events) != 1 || events[0].Category != audit.CategoryAVC || len(events[0].Records) != 5 {
+		t.Fatalf("mixed denial identity lost: %#v", events)
+	}
+	item := testItem()
+	item.Event = events[0]
+	store, err := New(t.TempDir(), Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(item); err != nil {
+		t.Fatal(err)
+	}
+	scan, err := store.Pending()
+	if err != nil || len(scan.Entries) != 1 || len(scan.Diagnostics) != 0 {
+		t.Fatalf("spool replay: %#v, %v", scan, err)
+	}
+	stored := scan.Entries[0].Item
+	if stored.EvidenceDigest != audit.EvidenceDigest(item.Event) || stored.Event.Records[1].Type != 1401 || stored.Event.Records[1].TypeName != "SELINUX_ERR" || string(stored.Event.Records[1].Raw) != "audit(100.000:1): supporting evidence" {
+		t.Fatal("spooled type or evidence changed")
+	}
+	request := protocol.IngestRequest{SchemaVersion: stored.SchemaVersion, Agent: stored.Agent, HostID: stored.HostID, BootID: stored.BootID, Events: []audit.Event{stored.Event}}
+	if err := request.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil || !strings.Contains(string(encoded), `"type":"selinux_err","type_name":"SELINUX_ERR"`) {
+		t.Fatalf("collector wire representation: %s, %v", encoded, err)
+	}
+	stored.Event.Records[1].TypeName = "selinux_err"
+	if audit.EvidenceDigest(stored.Event) != stored.EvidenceDigest {
+		t.Fatal("diagnostic alias changed evidence digest")
+	}
+}
 
 func TestSpoolSurvivesReopenAndAcknowledgement(t *testing.T) {
 	root := t.TempDir()
