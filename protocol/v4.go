@@ -50,6 +50,7 @@ type ErrorResponse struct {
 type ErrorBody struct {
 	Code    string             `json:"code"`
 	Message string             `json:"message"`
+	Phase   string             `json:"phase,omitempty"`
 	Details []ValidationDetail `json:"details,omitempty"`
 }
 

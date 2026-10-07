@@ -232,6 +232,9 @@ func SuccessfulStateTransitionRecord(message *libaudit.RawAuditMessage) bool {
 // StateTransitionFields is the receipt-side trust contract for validated shapes.
 // These are dimensions, not replacement values or derived capability names.
 func StateTransitionFields(message *libaudit.RawAuditMessage) []string {
+	if message == nil || !BoundaryCapableRecordType(message.Type) {
+		return nil
+	}
 	if SuccessfulPolicyLoadRecord(message) {
 		return []string{"booleans", "file_context_mappings", "policy_identity", "ports"}
 	}
@@ -467,9 +470,42 @@ func eventCategory(records []Record) (Category, bool) {
 		}
 	}
 	for _, record := range records {
-		if record.Type == auparse.AUDIT_MAC_POLICY_LOAD || record.Type == auparse.AUDIT_MAC_STATUS || BooleanChangeFields(&libaudit.RawAuditMessage{Type: record.Type, Data: record.Raw}) != nil || PortChangeRecord(&libaudit.RawAuditMessage{Type: record.Type, Data: record.Raw}) || FileContextChangeRecord(&libaudit.RawAuditMessage{Type: record.Type, Data: record.Raw}) {
+		if BoundaryCapableRecordType(record.Type) && (record.Type == auparse.AUDIT_MAC_POLICY_LOAD || record.Type == auparse.AUDIT_MAC_STATUS || BooleanChangeFields(&libaudit.RawAuditMessage{Type: record.Type, Data: record.Raw}) != nil || PortChangeRecord(&libaudit.RawAuditMessage{Type: record.Type, Data: record.Raw}) || FileContextChangeRecord(&libaudit.RawAuditMessage{Type: record.Type, Data: record.Raw})) {
 			return CategorySELinuxAdministrative, true
 		}
 	}
 	return "", false
+}
+
+// BoundaryCapableRecordType gates both administrative recognition and transport
+// isolation. New boundary families must enter here, regardless of payload validity.
+func BoundaryCapableRecordType(typ auparse.AuditMessageType) bool {
+	switch typ {
+	case auparse.AUDIT_MAC_POLICY_LOAD, auparse.AUDIT_MAC_CONFIG_CHANGE, auparse.AUDIT_MAC_STATUS, auparse.AUDIT_USER_MAC_CONFIG_CHANGE:
+		return true
+	default:
+		return false
+	}
+}
+
+// ProvablyNonBoundary distinguishes positive transport knowledge from absence of
+// a recognized transition. Unknown types and contradictory names fail closed.
+func ProvablyNonBoundary(event Event) bool {
+	if event.Category != CategoryAVC || len(event.Records) == 0 {
+		return false
+	}
+	for _, record := range event.Records {
+		if BoundaryCapableRecordType(record.Type) {
+			return false
+		}
+		switch record.Type {
+		case auparse.AUDIT_AVC, auparse.AUDIT_USER_AVC, auparse.AUDIT_SYSCALL, auparse.AUDIT_PATH, auparse.AUDIT_AVC_PATH, auparse.AUDIT_PROCTITLE, auparse.AUDIT_EXECVE, auparse.AUDIT_CWD, auparse.AUDIT_EOE, auparse.AUDIT_SELINUX_ERR:
+			if record.TypeName != record.Type.String() {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }

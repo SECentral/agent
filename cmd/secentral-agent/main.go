@@ -241,7 +241,7 @@ func main() {
 		fatal(logger, "open spool", err)
 	}
 	logger.Debug("spool ready")
-	client := delivery.Client{Endpoint: *endpoint, IngestionKey: *ingestionKey}
+	client := delivery.Client{Endpoint: *endpoint, IngestionKey: *ingestionKey, Logger: logger}
 	if *replay != "" {
 		if err := replayRequest(*replay, version, store); err != nil {
 			fatal(logger, "replay request", err)
@@ -527,7 +527,7 @@ func runDeliveryLoop(ctx context.Context, client delivery.Client, store *spool.S
 			if result.ExpectedContextBlocked > 0 {
 				logger.Warn("expected-context observations blocked", "count", result.ExpectedContextBlocked)
 			}
-			logger.Debug("delivery poll", "pending", result.Pending, "delivered", result.Delivered, "blocked", result.Blocked, "expected_context_pending", result.ExpectedContextPending, "expected_context_delivered", result.ExpectedContextDelivered)
+			logger.Debug("delivery poll", "pending", result.Pending, "delivered", result.Delivered, "blocked", result.Blocked, "guarded_splits", result.GuardedSplits, "isolated_rejections", result.IsolatedRejections, "expected_context_pending", result.ExpectedContextPending, "expected_context_delivered", result.ExpectedContextDelivered)
 			if err != nil {
 				logger.Warn("delivery failed", "error", err)
 				if _, ok := errors.AsType[*delivery.PermanentError](err); ok {

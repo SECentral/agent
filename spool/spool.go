@@ -345,6 +345,47 @@ func (s *Spool) Ack(id string) error {
 func (s *Spool) Block(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.block(id)
+}
+
+// BlockWithRejection retains bounded server diagnostics separately so the original
+// spool evidence bytes and spool-v2 replay remain unchanged. Sidecars are not events.
+// ponytail: diagnostic sidecars sit outside the event quota; charge their bounded
+// metadata bytes only if measured quarantine overhead warrants quota accounting.
+func (s *Spool) BlockWithRejection(id string, rejection protocol.ErrorBody) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rejection.Message = "" // Human text is neither authoritative nor retained audit evidence.
+	data, err := json.Marshal(rejection)
+	if err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(s.temporary, "rejection-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(temporary.Name())
+	if _, err := temporary.Write(data); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporary.Name(), s.path(s.blocked, id)+".rejection"); err != nil {
+		return err
+	}
+	if err := syncDirectory(s.blocked); err != nil {
+		return err
+	}
+	return s.block(id)
+}
+
+func (s *Spool) block(id string) error {
 
 	source, destination := s.path(s.pending, id), s.path(s.blocked, id)
 	if err := os.Rename(source, destination); err != nil {

@@ -7,12 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/secentral/agent/audit"
 	"github.com/secentral/agent/metadata"
 	"github.com/secentral/agent/protocol"
 	"github.com/secentral/agent/spool"
@@ -25,6 +27,7 @@ type Client struct {
 	IngestionKey   string
 	HTTPClient     *http.Client
 	MaxBatchEvents int
+	Logger         *slog.Logger
 }
 
 func (c Client) SendHeartbeat(ctx context.Context, host metadata.HostMetadata, hostObservedAt time.Time, version string) (protocol.HeartbeatResponse, error) {
@@ -125,6 +128,8 @@ type Result struct {
 	ExpectedContextDelivered int
 	ExpectedContextBlocked   int
 	Diagnostics              []error
+	GuardedSplits            int
+	IsolatedRejections       int
 }
 
 type PermanentError struct {
@@ -161,7 +166,9 @@ func (c Client) SendPending(ctx context.Context, store *spool.Spool) (Result, er
 			return result, nil
 		}
 		batch := compatibleBatch(scan.Entries, c.MaxBatchEvents)
-		if err := c.sendBatch(ctx, store, batch, &result); err != nil {
+		before := result.Delivered + result.Blocked
+		if err := c.sendBatch(ctx, store, batch, &result, nonBoundaryCohort(batch), len(batch)); err != nil {
+			result.Pending -= result.Delivered + result.Blocked - before
 			if _, ok := errors.AsType[*PermanentError](err); ok {
 				permanentErr = err
 				continue
@@ -219,7 +226,7 @@ func sameCheckpoint(a, b *time.Time) bool {
 	return a == nil && b == nil || a != nil && b != nil && a.Equal(*b)
 }
 
-func (c Client) sendBatch(ctx context.Context, store *spool.Spool, entries []spool.Entry, result *Result) error {
+func (c Client) sendBatch(ctx context.Context, store *spool.Spool, entries []spool.Entry, result *Result, originalSafe bool, originalSize int) error {
 	request := protocol.IngestRequest{
 		SchemaVersion:               entries[0].Item.SchemaVersion,
 		Agent:                       entries[0].Item.Agent,
@@ -256,28 +263,92 @@ func (c Client) sendBatch(ctx context.Context, store *spool.Spool, entries []spo
 			return &PermanentError{Status: response.StatusCode}
 		}
 		middle := len(entries) / 2
-		if err := c.sendBatch(ctx, store, entries[:middle], result); err != nil {
-			return err
-		}
-		return c.sendBatch(ctx, store, entries[middle:], result)
+		c.logger().Info("event batch size split", "status", 413, "batch_size", len(entries), "left", middle, "right", len(entries)-middle)
+		response.Body.Close()
+		return c.sendChildren(ctx, store, entries, result, originalSafe, originalSize)
 	}
 	if response.StatusCode == http.StatusAccepted {
 		for _, entry := range entries {
 			if err := store.Ack(entry.ID); err != nil {
 				return err
 			}
+			result.Delivered++
 		}
-		result.Delivered += len(entries)
 		return nil
+	}
+	if response.StatusCode == http.StatusUnprocessableEntity {
+		data, err := io.ReadAll(io.LimitReader(response.Body, maxValidationResponseBytes+1))
+		if err != nil {
+			c.logger().Warn("guarded subdivision aborted", "status", 422, "batch_size", len(entries), "reason", "uncertain_response_body")
+			return fmt.Errorf("read ingestion rejection: %w", err)
+		}
+		rejection, eligible := splitEligibleResponse(data, entries)
+		if originalSafe && eligible {
+			response.Body.Close()
+			if len(entries) == 1 {
+				entry := entries[0]
+				if err := store.BlockWithRejection(entry.ID, rejection); err != nil {
+					return err
+				}
+				result.Blocked++
+				result.IsolatedRejections++
+				result.Diagnostics = append(result.Diagnostics, fmt.Errorf("event %s quarantined: phase=%s details=%v", entry.ID, rejection.Phase, rejection.Details))
+				c.logger().Warn("invalid AVC singleton quarantined", "spool_id", entry.ID, "host_id", entry.Item.HostID, "boot_id", entry.Item.BootID, "audit_event", entry.Item.Event.ID, "evidence_digest", entry.Item.EvidenceDigest, "details", rejection.Details)
+				return nil // Fully handled permanent poison; continue primary siblings, then optional work.
+			}
+			middle := len(entries) / 2
+			result.GuardedSplits++
+			c.logger().Info("guarded event batch split", "original_batch_size", originalSize, "batch_size", len(entries), "left", middle, "right", len(entries)-middle, "details", rejection.Details)
+			return c.sendChildren(ctx, store, entries, result, originalSafe, originalSize)
+		}
+		c.logger().Warn("guarded subdivision refused", "status", 422, "original_batch_size", originalSize, "batch_size", len(entries), "cohort_proven", originalSafe, "server_proven", eligible)
 	}
 	if response.StatusCode >= 400 && response.StatusCode < 500 && response.StatusCode != http.StatusRequestTimeout && response.StatusCode != http.StatusTooManyRequests {
 		for _, entry := range entries {
 			if err := store.Block(entry.ID); err != nil {
 				return err
 			}
+			result.Blocked++
 		}
-		result.Blocked += len(entries)
 		return &PermanentError{Status: response.StatusCode}
 	}
 	return fmt.Errorf("temporary ingestion failure: HTTP %d", response.StatusCode)
+}
+
+// Keep the original proof through both size and poison subdivision. A permanently
+// handled child cannot force its unsent sibling to be reclassified as a new cohort.
+func (c Client) sendChildren(ctx context.Context, store *spool.Spool, entries []spool.Entry, result *Result, originalSafe bool, originalSize int) error {
+	middle := len(entries) / 2
+	var permanent error
+	for _, child := range [][]spool.Entry{entries[:middle], entries[middle:]} {
+		if err := c.sendBatch(ctx, store, child, result, originalSafe, originalSize); err != nil {
+			failure, ok := errors.AsType[*PermanentError](err)
+			if !ok {
+				c.logger().Warn("batch subdivision aborted", "batch_size", len(child), "reason", "retryable_or_local_failure")
+				return err
+			}
+			c.logger().Warn("child subdivision refused", "status", failure.Status, "batch_size", len(child), "reason", "non_eligible_permanent_response")
+			permanent = err
+		}
+	}
+	return permanent
+}
+
+func (c Client) logger() *slog.Logger {
+	if c.Logger != nil {
+		return c.Logger
+	}
+	return slog.Default()
+}
+
+func nonBoundaryCohort(entries []spool.Entry) bool {
+	if len(entries) == 0 {
+		return false
+	}
+	for _, entry := range entries {
+		if !audit.ProvablyNonBoundary(entry.Item.Event) {
+			return false
+		}
+	}
+	return true
 }
