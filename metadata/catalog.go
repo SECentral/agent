@@ -16,7 +16,7 @@ import (
 
 const (
 	CatalogSchemaVersion             = 1
-	CatalogCollectorSemanticsVersion = 3
+	CatalogCollectorSemanticsVersion = 4
 	CatalogCollectorVersion          = "secentral-catalog-collector-v1"
 )
 
@@ -48,8 +48,16 @@ type CatalogPlatform struct {
 }
 
 type CatalogFamilies struct {
-	Booleans CatalogBooleans `json:"booleans"`
-	Ports    CatalogPorts    `json:"ports"`
+	Booleans                   CatalogBooleans          `json:"booleans"`
+	Ports                      CatalogPorts             `json:"ports"`
+	EffectivePermissiveDomains CatalogPermissiveDomains `json:"effective_permissive_domains"`
+}
+
+type CatalogPermissiveDomains struct {
+	Complete                  bool     `json:"complete"`
+	Domains                   []string `json:"domains"`
+	ExtractorSemanticsVersion int      `json:"extractor_semantics_version"`
+	EvaluatorVersion          string   `json:"evaluator_version"`
 }
 
 type CatalogBooleans struct {
@@ -140,6 +148,10 @@ func collectCatalog(root string, now time.Time, run func(string, ...string) ([]b
 	if err != nil {
 		return CatalogArtifact{}, inspection, err
 	}
+	permissive, err := catalogPermissiveDomains(root, before, run)
+	if err != nil {
+		return CatalogArtifact{}, inspection, fmt.Errorf("effective permissive domains: %w", err)
+	}
 	after, diagnostics := policyIdentity(nil)
 	if len(diagnostics) > 0 {
 		return CatalogArtifact{}, inspection, fmt.Errorf("loaded policy identity after collection: %w", errors.Join(diagnostics...))
@@ -157,7 +169,7 @@ func collectCatalog(root string, now time.Time, run func(string, ...string) ([]b
 			CollectorSemanticsVersion: CatalogCollectorSemanticsVersion,
 			Policy:                    policy,
 			Platform:                  platform,
-			Families:                  CatalogFamilies{Booleans: booleans, Ports: ports},
+			Families:                  CatalogFamilies{Booleans: booleans, Ports: ports, EffectivePermissiveDomains: permissive},
 		},
 		Metadata: CatalogMetadata{CollectedAt: now.UTC(), CollectorVersion: CatalogCollectorVersion},
 	}
@@ -349,6 +361,9 @@ func ValidateCatalog(artifact CatalogArtifact) error {
 	if !artifact.Catalog.Families.Booleans.Complete || !artifact.Catalog.Families.Ports.Complete {
 		return errors.New("required catalog family incomplete")
 	}
+	if err := validateCatalogPermissiveDomains(artifact.Catalog.Families.EffectivePermissiveDomains); err != nil {
+		return err
+	}
 	if !slices.IsSortedFunc(artifact.Catalog.Families.Booleans.Entries, func(a, b CatalogBoolean) int {
 		return cmp.Compare(a.Name, b.Name)
 	}) {
@@ -405,6 +420,9 @@ func equalCatalogPorts(left, right []CatalogPortMapping) bool {
 }
 
 func commandOutput(name string, args ...string) ([]byte, error) {
+	if name == "python3" {
+		return permissiveCommandOutput(name, args...)
+	}
 	command := exec.Command(name, args...)
 	command.Env = catalogCommandEnv(os.Environ())
 	return command.Output()

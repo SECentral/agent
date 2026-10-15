@@ -81,6 +81,7 @@ func collect(args []string) {
 		fatal(err)
 	}
 	fmt.Printf("Catalog created\nPolicy: %s\nPolicy digest: %s\nBooleans: %d\nPorts: %d\nContent digest: %s\n", artifact.Catalog.Policy.Type, artifact.Catalog.Policy.LoadedPolicyDigest, len(artifact.Catalog.Families.Booleans.Entries), len(artifact.Catalog.Families.Ports.Mappings), artifact.ContentDigest)
+	fmt.Printf("Effective permissive domains: %d\n", len(artifact.Catalog.Families.EffectivePermissiveDomains.Domains))
 }
 
 func validate(args []string) {

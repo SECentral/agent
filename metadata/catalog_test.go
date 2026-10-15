@@ -13,7 +13,7 @@ import (
 func TestCollectCatalogIsDeterministicOutsideAcquisitionMetadata(t *testing.T) {
 	root := catalogFixtureRoot(t)
 	run := catalogRunner(nil)
-	identity := func([]error) (string, []error) { return "sha256:" + strings.Repeat("a", 64), nil }
+	identity := catalogTestIdentity
 
 	first, inspection, err := collectCatalog(root, time.Date(2026, 9, 20, 1, 2, 3, 0, time.UTC), run, identity)
 	if err != nil || !inspection.Complete() || !inspection.Clean() {
@@ -36,7 +36,7 @@ func TestCollectCatalogIsDeterministicOutsideAcquisitionMetadata(t *testing.T) {
 
 func TestCanonicalCatalogGoldenVector(t *testing.T) {
 	catalog := DistributionCatalog{
-		CollectorSemanticsVersion: 3,
+		CollectorSemanticsVersion: 4,
 		Policy: CatalogPolicy{
 			LoadedPolicyDigest:  "sha256:" + strings.Repeat("a", 64),
 			Type:                "targeted",
@@ -48,6 +48,7 @@ func TestCanonicalCatalogGoldenVector(t *testing.T) {
 		},
 		Platform: CatalogPlatform{Distribution: "example", MajorVersion: "9", Architecture: "x86_64"},
 		Families: CatalogFamilies{
+			EffectivePermissiveDomains: CatalogPermissiveDomains{Complete: true, Domains: []string{"example_t"}, ExtractorSemanticsVersion: 1, EvaluatorVersion: "SETools 4.5.1"},
 			Booleans: CatalogBooleans{Complete: true, Entries: []CatalogBoolean{
 				{Name: "z_boolean", Default: true, Description: "Z \"quoted\"\n"},
 				{Name: "a_boolean", Default: false, Description: "A café boolean"},
@@ -59,10 +60,11 @@ func TestCanonicalCatalogGoldenVector(t *testing.T) {
 		},
 	}
 	var vector struct {
-		CanonicalJSON string `json:"canonical_json"`
-		ContentDigest string `json:"content_digest"`
+		CanonicalJSON      string `json:"canonical_json"`
+		ContentDigest      string `json:"content_digest"`
+		EmptyContentDigest string `json:"empty_content_digest"`
 	}
-	data, err := os.ReadFile("testdata/catalog-canonicalization-v3.json")
+	data, err := os.ReadFile("testdata/catalog-canonicalization-v4.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,6 +78,15 @@ func TestCanonicalCatalogGoldenVector(t *testing.T) {
 	digest, err := catalogDigest(catalog)
 	if err != nil || digest != vector.ContentDigest {
 		t.Fatalf("digest = %q, err = %v", digest, err)
+	}
+	catalog.Families.EffectivePermissiveDomains.Domains = []string{}
+	data, err = canonicalCatalogJSON(catalog)
+	if err != nil || string(data) != strings.Replace(vector.CanonicalJSON, `["example_t"]`, `[]`, 1) {
+		t.Fatalf("empty canonical JSON = %q, err = %v", data, err)
+	}
+	digest, err = catalogDigest(catalog)
+	if err != nil || digest != vector.EmptyContentDigest {
+		t.Fatalf("empty digest = %q, err = %v", digest, err)
 	}
 }
 
@@ -131,7 +142,7 @@ func TestCollectCatalogReportsLocalCustomizationsBeforeRefusing(t *testing.T) {
 		"semanage port -l -C -n":  []byte("SELinux Port Type Proto Port Number\nhttp_port_t tcp 8443\n"),
 		"semanage fcontext -l -C": []byte("SELinux fcontext type Context\n/srv/www(/.*)? all files system_u:object_r:httpd_sys_content_t:s0\n"),
 	})
-	identity := func([]error) (string, []error) { return "sha256:" + strings.Repeat("a", 64), nil }
+	identity := catalogTestIdentity
 
 	_, inspection, err := collectCatalog(root, time.Now(), run, identity)
 	if err == nil || !strings.Contains(err.Error(), "local SELinux customization") {
@@ -151,7 +162,7 @@ func TestCollectCatalogRefusesIncompleteCustomizationInspection(t *testing.T) {
 		}
 		return base(name, args...)
 	}
-	identity := func([]error) (string, []error) { return "sha256:" + strings.Repeat("a", 64), nil }
+	identity := catalogTestIdentity
 
 	_, inspection, err := collectCatalog(root, time.Now(), run, identity)
 	if err == nil || !strings.Contains(err.Error(), "inspection incomplete") {
@@ -164,7 +175,7 @@ func TestCollectCatalogRefusesIncompleteCustomizationInspection(t *testing.T) {
 
 func TestCollectCatalogRefusesIncompleteBooleanAndPortInventories(t *testing.T) {
 	root := catalogFixtureRoot(t)
-	identity := func([]error) (string, []error) { return "sha256:" + strings.Repeat("a", 64), nil }
+	identity := catalogTestIdentity
 	for name, overrides := range map[string]map[string][]byte{
 		"boolean": {"getsebool -a": []byte("httpd_can_network_connect --> off\nbroken\n")},
 		"port":    {"semanage port -l -n": []byte("SELinux Port Type Proto Port Number\nhttp_port_t tcp 80\nbroken\n")},
@@ -239,7 +250,7 @@ func TestValidateCatalogAcceptsSemanagePortProtocols(t *testing.T) {
 
 func TestCollectionCanonicalizesEquivalentToolOutputOrder(t *testing.T) {
 	root := catalogFixtureRoot(t)
-	identity := func([]error) (string, []error) { return "sha256:" + strings.Repeat("a", 64), nil }
+	identity := catalogTestIdentity
 	first, _, err := collectCatalog(root, time.Now(), catalogRunner(map[string][]byte{
 		"getsebool -a":        []byte("httpd_can_network_connect --> off\nvirt_use_nfs --> off\n"),
 		"semanage boolean -l": []byte("SELinux boolean State Default\nhttpd_can_network_connect (off , off) Allow network\nvirt_use_nfs (off , off) Allow NFS\n"),
@@ -327,7 +338,7 @@ func TestCatalogInspectionAndAgentBooleanValuesAgreeOnLocalChange(t *testing.T) 
 
 func testCatalogArtifact(t *testing.T) CatalogArtifact {
 	t.Helper()
-	identity := func([]error) (string, []error) { return "sha256:" + strings.Repeat("a", 64), nil }
+	identity := catalogTestIdentity
 	artifact, _, err := collectCatalog(catalogFixtureRoot(t), time.Now(), catalogRunner(nil), identity)
 	if err != nil {
 		t.Fatal(err)
@@ -350,7 +361,7 @@ func TestCollectCatalogRejectsPolicyChangeDuringCollection(t *testing.T) {
 	identity := func([]error) (string, []error) {
 		identityCalls++
 		if identityCalls == 1 {
-			return "sha256:" + strings.Repeat("a", 64), nil
+			return catalogTestIdentity(nil)
 		}
 		return "sha256:" + strings.Repeat("b", 64), nil
 	}
@@ -368,11 +379,15 @@ func catalogFixtureRoot(t *testing.T) string {
 	writeFixture(t, root, "/etc/selinux/config", "SELINUX=enforcing\nSELINUXTYPE=targeted\n")
 	writeFixture(t, root, "/sys/fs/selinux/enforce", "1\n")
 	writeFixture(t, root, "/sys/fs/selinux/policyvers", "33\n")
+	writeFixture(t, root, "/sys/fs/selinux/policy", "test policy")
 	return root
 }
 
 func catalogRunner(overrides map[string][]byte) func(string, ...string) ([]byte, error) {
 	return func(name string, args ...string) ([]byte, error) {
+		if name == "python3" {
+			return []byte(`{"domains":["example_t"],"evaluator_version":"SETools 4.5.1"}`), nil
+		}
 		key := name + " " + strings.Join(args, " ")
 		if value, ok := overrides[key]; ok {
 			return value, nil
@@ -397,4 +412,8 @@ func catalogRunner(overrides map[string][]byte) func(string, ...string) ([]byte,
 		}
 		return nil, errors.New("unexpected command: " + key)
 	}
+}
+
+func catalogTestIdentity([]error) (string, []error) {
+	return "sha256:3d089599e2b17930e4579044928ba7d9d77927b35f3fccbd491d80de41cef1d3", nil
 }

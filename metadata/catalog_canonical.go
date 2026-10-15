@@ -17,10 +17,23 @@ func canonicalCatalogJSON(catalog DistributionCatalog) ([]byte, error) {
 	sortCatalogPorts(ports)
 	packages := slices.Clone(catalog.Policy.Packages)
 	sortCatalogPackages(packages)
+	permissive := catalog.Families.EffectivePermissiveDomains
+	domains := slices.Clone(permissive.Domains)
+	slices.Sort(domains)
+	canonicalDomains := make([]any, 0, len(domains))
+	for _, domain := range domains {
+		canonicalDomains = append(canonicalDomains, domain)
+	}
 
 	return canonicalJSON(map[string]any{
 		"collector_semantics_version": catalog.CollectorSemanticsVersion,
 		"families": map[string]any{
+			"effective_permissive_domains": map[string]any{
+				"complete":                    permissive.Complete,
+				"domains":                     canonicalDomains,
+				"extractor_semantics_version": permissive.ExtractorSemanticsVersion,
+				"evaluator_version":           permissive.EvaluatorVersion,
+			},
 			"booleans": map[string]any{
 				"complete": catalog.Families.Booleans.Complete,
 				"entries":  canonicalBooleanEntries(booleans),
