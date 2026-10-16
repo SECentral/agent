@@ -39,6 +39,8 @@ archives:
     files:
       - src: contrib/systemd/secentral-agent.service
         dst: systemd/secentral-agent.service
+      - src: contrib/systemd/agent.env
+        dst: systemd/agent.env
   - id: catalog-collector
     builds:
       - catalog-collector
