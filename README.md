@@ -16,6 +16,30 @@ The SECentral agent is a Go collector for SELinux audit events.
 - Linux with audit event access for normal collection. Most unit tests do not
   require SELinux to be enabled.
 
+## Install from COPR
+
+RPM packages are available from
+[mikelo2/secentral-agent](https://copr.fedorainfracloud.org/coprs/mikelo2/secentral-agent/).
+On a COPR-supported Fedora or RHEL-family system, enable the repository and
+install the agent:
+
+```sh
+sudo dnf copr enable mikelo2/secentral-agent
+sudo dnf install secentral-agent
+```
+
+The standalone catalog-generation tool is packaged separately:
+
+```sh
+sudo dnf install secentral-agent-catalog-collector
+```
+
+The catalog collector is a development/reference-data tool, not part of normal
+agent operation. See its [usage instructions](cmd/secentral-catalog-collector/README.md).
+The agent requires configuration with a server endpoint and ingestion key before
+it can deliver events. Review the package-provided service and configuration
+files for your distribution before enabling the service.
+
 ## Test and format
 
 ```sh
