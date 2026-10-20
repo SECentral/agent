@@ -2,6 +2,8 @@
 
 The SECentral agent is a Go collector for SELinux audit events.
 
+See [Contributing](CONTRIBUTING.md) for feedback and contribution guidelines.
+
 ## What it does
 
 - Assembles related audit records into events and preserves their raw evidence.
