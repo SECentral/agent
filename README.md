@@ -14,11 +14,15 @@ See [Contributing](CONTRIBUTING.md) for feedback and contribution guidelines.
 
 ## Requirements
 
-- Go version specified in `go.mod`.
+- Go version specified in `go.mod` when building from source; RPM installs do not
+  require Go.
 - Linux with audit event access for normal collection. Most unit tests do not
   require SELinux to be enabled.
 
 ## Install from COPR
+
+For server deployment, agent configuration, startup and a test denial, follow the
+[Quick Start](https://github.com/SECentral/server/blob/main/docs/quick-start.md).
 
 RPM packages are available from
 [mikelo2/secentral-agent](https://copr.fedorainfracloud.org/coprs/mikelo2/secentral-agent/).
@@ -38,9 +42,10 @@ sudo dnf install secentral-agent-catalog-collector
 
 The catalog collector is a development/reference-data tool, not part of normal
 agent operation. See its [usage instructions](cmd/secentral-catalog-collector/README.md).
-The agent requires configuration with a server endpoint and ingestion key before
-it can deliver events. Review the package-provided service and configuration
-files for your distribution before enabling the service.
+The RPM installs `/etc/secentral/agent.env` and the systemd service. Set
+`SECENTRAL_ENDPOINT` (including `/api/v1/events`) and `SECENTRAL_INGESTION_KEY` in
+that file before enabling the agent. Keep it mode `0600`, and follow the Quick
+Start for auditd and SELinux inspection dependencies.
 
 ## Test and format
 
@@ -49,9 +54,8 @@ gofmt -w $(git ls-files '*.go')
 go test ./...
 ```
 
-See [TEST.md](TEST.md) for contributor testing guidance. See the
-SECentral server repository for the ingestion API and self-hosted deployment
-instructions.
+See [TEST.md](TEST.md) for contributor testing guidance and the
+[SECentral server](https://github.com/SECentral/server) for the ingestion API.
 
 An [example hardened systemd service unit](contrib/systemd/secentral-agent.service)
 is available for Linux deployments; review its permissions and paths for your
