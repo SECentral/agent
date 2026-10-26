@@ -334,3 +334,59 @@ func TestAssemblerReconstructsSanitizedRealHTTPDAVC(t *testing.T) {
 		t.Fatal("real AVC fixture evidence was not preserved")
 	}
 }
+
+func TestAssemblerRealFleetEvidence(t *testing.T) {
+	data, err := os.ReadFile("testdata/real-fleet.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Cases []struct {
+			Name    string `json:"name"`
+			Records []struct {
+				TypeName string `json:"type_name"`
+				Payload  string `json:"payload"`
+			} `json:"records"`
+			Expected struct {
+				Sequence         uint32 `json:"sequence"`
+				RecordCount      int    `json:"record_count"`
+				CompletionReason string `json:"completion_reason"`
+			} `json:"expected"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	types := map[string]auparse.AuditMessageType{"AVC": auparse.AUDIT_AVC, "SYSCALL": auparse.AUDIT_SYSCALL, "PROCTITLE": auparse.AUDIT_PROCTITLE, "EOE": auparse.AUDIT_EOE}
+	for _, capture := range fixture.Cases {
+		t.Run(capture.Name, func(t *testing.T) {
+			a := NewAssembler(DefaultConfig())
+			now := time.Unix(1700000000, 0)
+			var events []Event
+			for _, record := range capture.Records {
+				typeCode, ok := types[record.TypeName]
+				if !ok {
+					t.Fatalf("unsupported fixture record: %s", record.TypeName)
+				}
+				completed, err := a.Push(&libaudit.RawAuditMessage{Type: typeCode, Data: []byte(record.Payload)}, now)
+				if err != nil {
+					t.Fatal(err)
+				}
+				events = append(events, completed...)
+			}
+			events = append(events, a.Maintain(now.Add(time.Hour))...)
+			if len(events) != 1 {
+				t.Fatalf("got %d events", len(events))
+			}
+			event := events[0]
+			if event.ID.Sequence != capture.Expected.Sequence || len(event.Records) != capture.Expected.RecordCount || string(event.Completion) != capture.Expected.CompletionReason {
+				t.Fatalf("unexpected assembled event: %#v", event)
+			}
+			for i, record := range capture.Records {
+				if string(event.Records[i].Raw) != record.Payload {
+					t.Fatalf("raw record %d changed", i)
+				}
+			}
+		})
+	}
+}

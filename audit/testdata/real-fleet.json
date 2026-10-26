@@ -1,0 +1,118 @@
+{
+  "source": "Sanitized SELinux audit records: AlmaLinux 9.8 (policy 38.1.75-2.el9_8.1) and Fedora 44 (policy 44.11-1.fc44).",
+  "sanitization": "Host/boot IDs, audit timestamps/serials, process IDs, inode, pointer argument a1 and owned filename replaced consistently. Fixed httpd process arguments decoded, reviewed and canonicalized. SELinux contexts, permissions, syscall outcomes, record order and missing records preserved.",
+  "cases": [
+    {
+      "name": "alma9-enforcing-syscall",
+      "distribution": "almalinux",
+      "host_id": "fixture-alma9",
+      "boot_id": "11111111-1111-4111-8111-111111111111",
+      "records": [
+        {
+          "type_name": "AVC",
+          "payload": "audit(1700000000.123:1001): avc:  denied  { read } for  pid=77 comm=\"httpd\" name=\"example.txt\" dev=\"vda1\" ino=12345 scontext=system_u:system_r:httpd_t:s0 tcontext=unconfined_u:object_r:user_home_t:s0 tclass=file permissive=0"
+        },
+        {
+          "type_name": "SYSCALL",
+          "payload": "audit(1700000000.123:1001): arch=c000003e syscall=257 success=no exit=-13 a0=ffffff9c a1=1000 a2=80000 a3=0 items=0 ppid=76 pid=77 auid=4294967295 uid=48 gid=48 euid=48 suid=48 fsuid=48 egid=48 sgid=48 fsgid=48 tty=(none) ses=4294967295 comm=\"httpd\" exe=\"/usr/sbin/httpd\" subj=system_u:system_r:httpd_t:s0 key=(null)"
+        },
+        {
+          "type_name": "PROCTITLE",
+          "payload": "audit(1700000000.123:1001): proctitle=2F7573722F7362696E2F6874747064002D44464F524547524F554E44"
+        },
+        {
+          "type_name": "EOE",
+          "payload": "audit(1700000000.123:1001): "
+        }
+      ],
+      "expected": {
+        "sequence": 1001,
+        "record_count": 4,
+        "completion_reason": "eoe",
+        "enforcement": "enforcing",
+        "syscall_outcome": "failed",
+        "permissions": [
+          [
+            "read"
+          ]
+        ],
+        "source_type": "httpd_t",
+        "target_type": "user_home_t",
+        "target_class": "file"
+      }
+    },
+    {
+      "name": "fedora44-enforcing-avc-only",
+      "distribution": "fedora",
+      "host_id": "fixture-fedora44",
+      "boot_id": "22222222-2222-4222-8222-222222222222",
+      "records": [
+        {
+          "type_name": "AVC",
+          "payload": "audit(1700000001.123:1002): avc:  denied  { read } for  pid=77 comm=\"httpd\" name=\"example.txt\" dev=\"vda3\" ino=12345 scontext=system_u:system_r:httpd_t:s0 tcontext=unconfined_u:object_r:user_home_t:s0 tclass=file permissive=0"
+        }
+      ],
+      "expected": {
+        "sequence": 1002,
+        "record_count": 1,
+        "completion_reason": "timeout",
+        "enforcement": "enforcing",
+        "syscall_outcome": "unknown",
+        "permissions": [
+          [
+            "read"
+          ]
+        ],
+        "source_type": "httpd_t",
+        "target_type": "user_home_t",
+        "target_class": "file"
+      }
+    },
+    {
+      "name": "alma9-permissive-multiple-avcs",
+      "distribution": "almalinux",
+      "host_id": "fixture-alma9",
+      "boot_id": "11111111-1111-4111-8111-111111111111",
+      "records": [
+        {
+          "type_name": "AVC",
+          "payload": "audit(1700000002.123:1003): avc:  denied  { read } for  pid=77 comm=\"httpd\" name=\"example.txt\" dev=\"vda1\" ino=12345 scontext=system_u:system_r:httpd_t:s0 tcontext=unconfined_u:object_r:user_home_t:s0 tclass=file permissive=1"
+        },
+        {
+          "type_name": "AVC",
+          "payload": "audit(1700000002.123:1003): avc:  denied  { open } for  pid=77 comm=\"httpd\" path=\"/var/www/html/example.txt\" dev=\"vda1\" ino=12345 scontext=system_u:system_r:httpd_t:s0 tcontext=unconfined_u:object_r:user_home_t:s0 tclass=file permissive=1"
+        },
+        {
+          "type_name": "SYSCALL",
+          "payload": "audit(1700000002.123:1003): arch=c000003e syscall=257 success=yes exit=13 a0=ffffff9c a1=1000 a2=80000 a3=0 items=0 ppid=76 pid=77 auid=4294967295 uid=48 gid=48 euid=48 suid=48 fsuid=48 egid=48 sgid=48 fsgid=48 tty=(none) ses=4294967295 comm=\"httpd\" exe=\"/usr/sbin/httpd\" subj=system_u:system_r:httpd_t:s0 key=(null)"
+        },
+        {
+          "type_name": "PROCTITLE",
+          "payload": "audit(1700000002.123:1003): proctitle=2F7573722F7362696E2F6874747064002D44464F524547524F554E44"
+        },
+        {
+          "type_name": "EOE",
+          "payload": "audit(1700000002.123:1003): "
+        }
+      ],
+      "expected": {
+        "sequence": 1003,
+        "record_count": 5,
+        "completion_reason": "eoe",
+        "enforcement": "permissive",
+        "syscall_outcome": "succeeded",
+        "permissions": [
+          [
+            "read"
+          ],
+          [
+            "open"
+          ]
+        ],
+        "source_type": "httpd_t",
+        "target_type": "user_home_t",
+        "target_class": "file"
+      }
+    }
+  ]
+}
