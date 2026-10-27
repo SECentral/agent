@@ -1,0 +1,53 @@
+{
+  "source": "Sanitized SELinux audit records from AlmaLinux 9.8, policy 38.1.75-2.el9_8.1, with three buffered audit events.",
+  "sanitization": "Host and boot identities, audit serials, process IDs, inode, pointer values and owned filename replaced consistently. All timestamps shifted by one constant offset, preserving fractions and event/collection/receipt relationships. Raw record order and missing evidence preserved; fixed encoded httpd arguments decoded and reviewed.",
+  "request": {
+    "schema_version": 4,
+    "agent": { "version": "0.0.5" },
+    "host_observed_at": "2023-11-14T22:12:12.332709364Z",
+    "host_id": "fixture-buffered-host",
+    "boot_id": "33333333-3333-4333-8333-333333333333",
+    "events": [
+      {
+        "category": "avc",
+        "audit_event": { "timestamp": "2023-11-14T22:15:00.219Z", "sequence": 2001 },
+        "agent_received_at": "2023-11-14T22:15:00.221263576Z",
+        "records": [
+          { "position": 0, "type": "avc", "type_name": "AVC", "timestamp": "2023-11-14T22:15:00.219Z", "sequence": 2001, "payload": "YXVkaXQoMTcwMDAwMDEwMC4yMTk6MjAwMSk6IGF2YzogIGRlbmllZCAgeyByZWFkIH0gZm9yICBwaWQ9NzYgY29tbT0iaHR0cGQiIG5hbWU9ImV4YW1wbGUudHh0IiBkZXY9InZkYTEiIGlubz0xMjM0NSBzY29udGV4dD1zeXN0ZW1fdTpzeXN0ZW1fcjpodHRwZF90OnMwIHRjb250ZXh0PXVuY29uZmluZWRfdTpvYmplY3Rfcjp1c2VyX2hvbWVfdDpzMCB0Y2xhc3M9ZmlsZSBwZXJtaXNzaXZlPTA=" },
+          { "position": 1, "type": "syscall", "type_name": "SYSCALL", "timestamp": "2023-11-14T22:15:00.219Z", "sequence": 2001, "payload": "YXVkaXQoMTcwMDAwMDEwMC4yMTk6MjAwMSk6IGFyY2g9YzAwMDAwM2Ugc3lzY2FsbD0yNTcgc3VjY2Vzcz1ubyBleGl0PS0xMyBhMD1mZmZmZmY5YyBhMT0xMDAwIGEyPTgwMDAwIGEzPTAgaXRlbXM9MCBwcGlkPTc3IHBpZD03NiBhdWlkPTQyOTQ5NjcyOTUgdWlkPTQ4IGdpZD00OCBldWlkPTQ4IHN1aWQ9NDggZnN1aWQ9NDggZWdpZD00OCBzZ2lkPTQ4IGZzZ2lkPTQ4IHR0eT0obm9uZSkgc2VzPTQyOTQ5NjcyOTUgY29tbT0iaHR0cGQiIGV4ZT0iL3Vzci9zYmluL2h0dHBkIiBzdWJqPXN5c3RlbV91OnN5c3RlbV9yOmh0dHBkX3Q6czAga2V5PShudWxsKQ==" },
+          { "position": 2, "type": "proctitle", "type_name": "PROCTITLE", "timestamp": "2023-11-14T22:15:00.219Z", "sequence": 2001, "payload": "YXVkaXQoMTcwMDAwMDEwMC4yMTk6MjAwMSk6IHByb2N0aXRsZT0yRjc1NzM3MjJGNzM2MjY5NkUyRjY4NzQ3NDcwNjQwMDJENDQ0NjRGNTI0NTQ3NTI0RjU1NEU0NA==" },
+          { "position": 3, "type": "eoe", "type_name": "EOE", "timestamp": "2023-11-14T22:15:00.219Z", "sequence": 2001, "payload": "YXVkaXQoMTcwMDAwMDEwMC4yMTk6MjAwMSk6IA==" }
+        ],
+        "completion_reason": "eoe"
+      },
+      {
+        "category": "avc",
+        "audit_event": { "timestamp": "2023-11-14T22:15:02.236Z", "sequence": 2002 },
+        "agent_received_at": "2023-11-14T22:15:02.237881832Z",
+        "records": [
+          { "position": 0, "type": "avc", "type_name": "AVC", "timestamp": "2023-11-14T22:15:02.236Z", "sequence": 2002, "payload": "YXVkaXQoMTcwMDAwMDEwMi4yMzY6MjAwMik6IGF2YzogIGRlbmllZCAgeyByZWFkIH0gZm9yICBwaWQ9NzYgY29tbT0iaHR0cGQiIG5hbWU9ImV4YW1wbGUudHh0IiBkZXY9InZkYTEiIGlubz0xMjM0NSBzY29udGV4dD1zeXN0ZW1fdTpzeXN0ZW1fcjpodHRwZF90OnMwIHRjb250ZXh0PXVuY29uZmluZWRfdTpvYmplY3Rfcjp1c2VyX2hvbWVfdDpzMCB0Y2xhc3M9ZmlsZSBwZXJtaXNzaXZlPTA=" },
+          { "position": 1, "type": "syscall", "type_name": "SYSCALL", "timestamp": "2023-11-14T22:15:02.236Z", "sequence": 2002, "payload": "YXVkaXQoMTcwMDAwMDEwMi4yMzY6MjAwMik6IGFyY2g9YzAwMDAwM2Ugc3lzY2FsbD0yNTcgc3VjY2Vzcz1ubyBleGl0PS0xMyBhMD1mZmZmZmY5YyBhMT0yMDAwIGEyPTgwMDAwIGEzPTAgaXRlbXM9MCBwcGlkPTc3IHBpZD03NiBhdWlkPTQyOTQ5NjcyOTUgdWlkPTQ4IGdpZD00OCBldWlkPTQ4IHN1aWQ9NDggZnN1aWQ9NDggZWdpZD00OCBzZ2lkPTQ4IGZzZ2lkPTQ4IHR0eT0obm9uZSkgc2VzPTQyOTQ5NjcyOTUgY29tbT0iaHR0cGQiIGV4ZT0iL3Vzci9zYmluL2h0dHBkIiBzdWJqPXN5c3RlbV91OnN5c3RlbV9yOmh0dHBkX3Q6czAga2V5PShudWxsKQ==" },
+          { "position": 2, "type": "proctitle", "type_name": "PROCTITLE", "timestamp": "2023-11-14T22:15:02.236Z", "sequence": 2002, "payload": "YXVkaXQoMTcwMDAwMDEwMi4yMzY6MjAwMik6IHByb2N0aXRsZT0yRjc1NzM3MjJGNzM2MjY5NkUyRjY4NzQ3NDcwNjQwMDJENDQ0NjRGNTI0NTQ3NTI0RjU1NEU0NA==" },
+          { "position": 3, "type": "eoe", "type_name": "EOE", "timestamp": "2023-11-14T22:15:02.236Z", "sequence": 2002, "payload": "YXVkaXQoMTcwMDAwMDEwMi4yMzY6MjAwMik6IA==" }
+        ],
+        "completion_reason": "eoe"
+      },
+      {
+        "category": "avc",
+        "audit_event": { "timestamp": "2023-11-14T22:15:04.254Z", "sequence": 2003 },
+        "agent_received_at": "2023-11-14T22:15:04.256173465Z",
+        "records": [
+          { "position": 0, "type": "avc", "type_name": "AVC", "timestamp": "2023-11-14T22:15:04.254Z", "sequence": 2003, "payload": "YXVkaXQoMTcwMDAwMDEwNC4yNTQ6MjAwMyk6IGF2YzogIGRlbmllZCAgeyByZWFkIH0gZm9yICBwaWQ9NzYgY29tbT0iaHR0cGQiIG5hbWU9ImV4YW1wbGUudHh0IiBkZXY9InZkYTEiIGlubz0xMjM0NSBzY29udGV4dD1zeXN0ZW1fdTpzeXN0ZW1fcjpodHRwZF90OnMwIHRjb250ZXh0PXVuY29uZmluZWRfdTpvYmplY3Rfcjp1c2VyX2hvbWVfdDpzMCB0Y2xhc3M9ZmlsZSBwZXJtaXNzaXZlPTA=" },
+          { "position": 1, "type": "syscall", "type_name": "SYSCALL", "timestamp": "2023-11-14T22:15:04.254Z", "sequence": 2003, "payload": "YXVkaXQoMTcwMDAwMDEwNC4yNTQ6MjAwMyk6IGFyY2g9YzAwMDAwM2Ugc3lzY2FsbD0yNTcgc3VjY2Vzcz1ubyBleGl0PS0xMyBhMD1mZmZmZmY5YyBhMT0zMDAwIGEyPTgwMDAwIGEzPTAgaXRlbXM9MCBwcGlkPTc3IHBpZD03NiBhdWlkPTQyOTQ5NjcyOTUgdWlkPTQ4IGdpZD00OCBldWlkPTQ4IHN1aWQ9NDggZnN1aWQ9NDggZWdpZD00OCBzZ2lkPTQ4IGZzZ2lkPTQ4IHR0eT0obm9uZSkgc2VzPTQyOTQ5NjcyOTUgY29tbT0iaHR0cGQiIGV4ZT0iL3Vzci9zYmluL2h0dHBkIiBzdWJqPXN5c3RlbV91OnN5c3RlbV9yOmh0dHBkX3Q6czAga2V5PShudWxsKQ==" },
+          { "position": 2, "type": "proctitle", "type_name": "PROCTITLE", "timestamp": "2023-11-14T22:15:04.254Z", "sequence": 2003, "payload": "YXVkaXQoMTcwMDAwMDEwNC4yNTQ6MjAwMyk6IHByb2N0aXRsZT0yRjc1NzM3MjJGNzM2MjY5NkUyRjY4NzQ3NDcwNjQwMDJENDQ0NjRGNTI0NTQ3NTI0RjU1NEU0NA==" },
+          { "position": 3, "type": "eoe", "type_name": "EOE", "timestamp": "2023-11-14T22:15:04.254Z", "sequence": 2003, "payload": "YXVkaXQoMTcwMDAwMDEwNC4yNTQ6MjAwMyk6IA==" }
+        ],
+        "completion_reason": "eoe"
+      }
+    ]
+  },
+  "deliveries": [
+    { "received_at": "2023-11-14T22:15:27.367966Z", "sequences": [2001] },
+    { "received_at": "2023-11-14T22:15:27.525703Z", "sequences": [2002, 2003] }
+  ]
+}
